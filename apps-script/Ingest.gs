@@ -1,0 +1,251 @@
+/**
+ * 수집 파이프라인.
+ *
+ *   [1] RawMessage 저장 (무손실)
+ *   [2] 중복이면 종료
+ *   [3] 파싱  -> 실패해도 RawMessage는 남는다 (인박스행)
+ *   [4] 거래 생성
+ *   [5] 청구 스케줄 생성
+ *   [6] 앵커 기록 (잔액 / 월 누적)
+ *   [7] 단축어에 결과 반환 -> 미분류면 아이폰에서 메뉴를 띄운다
+ */
+
+function ingest(payload) {
+  const body = String(payload.body || '');
+  const sender = String(payload.sender || '');
+  const receivedAt = payload.receivedAt ? new Date(payload.receivedAt) : new Date();
+
+  if (!body.trim()) return { status: 'ignored', reason: 'empty-body' };
+
+  // [2] 중복 — 단축어가 같은 문자를 두 번 넘기는 경우가 있다
+  const key = dedupeKey_(body, receivedAt);
+  if (findBy_('RawMessage', 'dedupeKey', key)) {
+    return { status: 'duplicate' };
+  }
+
+  // [1] 원문 저장
+  const rawId = newId_('raw');
+  append_('RawMessage', {
+    id: rawId,
+    receivedAt: toIso_(receivedAt),
+    sender: sender,
+    body: body,
+    dedupeKey: key,
+    parserVersion: CONFIG.parserVersion,
+    parsedOk: false,
+    parseNote: '',
+    txnId: '',
+    ingestedAt: nowIso_(),
+  });
+
+  // [3] 파싱
+  const parsed = parseMessage_(body, sender, receivedAt);
+  update_('RawMessage', rawId, { parsedOk: parsed.ok, parseNote: parsed.note });
+
+  if (parsed.kind === 'ad') {
+    return { status: 'ignored', reason: 'ad' };
+  }
+  if (!parsed.ok) {
+    return { status: 'parse_failed', rawId: rawId, note: parsed.note };
+  }
+
+  // [6] 앵커 — 문자에 찍힌 잔액/누적을 기록해 두고 나중에 앱 계산값과 대조한다
+  recordAnchors_(parsed, rawId);
+
+  if (parsed.kind === 'cancel') {
+    // 승인취소 매칭은 M2. 지금은 원문만 남기고 인박스로 보낸다.
+    return { status: 'needs_review', rawId: rawId, reason: 'cancel', amount: parsed.amount };
+  }
+
+  // [4] 거래 생성
+  const txn = buildTransaction_(parsed, rawId);
+  const decision = txn.type === 'expense'
+    ? classify_(parsed.merchantRaw, parsed.amount)
+    : { categoryId: txn.categoryId, reason: 'fixed' };
+
+  txn.categoryId = decision.categoryId || '';
+  txn.merchantId = decision.merchantId || '';
+  txn.status = txn.categoryId ? 'confirmed' : 'pendingCategory';
+  append_('Transaction', txn);
+  update_('RawMessage', rawId, { txnId: txn.id });
+
+  // [5] 청구 스케줄
+  buildSchedules_(txn).forEach(function (s) { append_('PaymentSchedule', s); });
+
+  // [7] 단축어 응답
+  return {
+    status: txn.categoryId ? 'categorized' : 'uncategorized',
+    txnId: txn.id,
+    merchant: parsed.merchantRaw || '(가맹점 미상)',
+    amount: parsed.amount,
+    type: txn.type,
+    categoryId: txn.categoryId,
+    confidence: parsed.confidence,
+    layer: parsed.layer,
+    suggestions: topCategories_(3),
+  };
+}
+
+function buildTransaction_(parsed, rawId) {
+  const accountId = accountFor_(parsed.issuer);
+  const txn = {
+    id: newId_('txn'),
+    type: 'expense',
+    amount: parsed.amount,
+    currency: 'KRW',
+    occurredAt: toIso_(parsed.occurredAt),
+    accountId: accountId,
+    counterAccountId: '',
+    categoryId: '',
+    tags: '',
+    merchantRaw: parsed.merchantRaw || '',
+    merchantId: '',
+    memo: '',
+    payMethod: parsed.installmentMonths > 0 ? 'installment' : 'lump',
+    installmentMonths: parsed.installmentMonths || 0,
+    status: 'pendingCategory',
+    voidsTxnId: '',
+    voidedByTxnId: '',
+    source: 'sms',
+    rawMessageId: rawId,
+    dedupeKey: '',
+    excludeFromBudget: false,
+  };
+
+  if (parsed.kind === 'deposit') {
+    txn.type = 'income';
+    txn.categoryId = 'cat_salary';
+    return txn;
+  }
+
+  if (parsed.kind === 'withdrawal') {
+    // 카드대금 출금은 지출이 아니라 계정 간 이체다.
+    // 이걸 지출로 잡으면 매달 카드값만큼 지출이 부풀어 오른다.
+    if (isCardBill_(parsed.merchantRaw)) {
+      txn.type = 'transfer';
+      txn.counterAccountId = 'acc_hyundai';
+      txn.categoryId = 'cat_cardbill';
+      txn.excludeFromBudget = true;
+    } else if (isAtm_(parsed.merchantRaw)) {
+      txn.type = 'transfer';
+      txn.counterAccountId = 'acc_cash';
+      txn.categoryId = 'cat_withdraw';
+      txn.excludeFromBudget = true;
+    }
+    return txn;
+  }
+
+  return txn;   // approval -> expense
+}
+
+function isCardBill_(merchantRaw) {
+  return /현대\s*카드|카드\s*대금|일시불대금/.test(String(merchantRaw || ''));
+}
+
+function isAtm_(merchantRaw) {
+  return /ATM|CD기|현금인출/i.test(String(merchantRaw || ''));
+}
+
+function accountFor_(issuer) {
+  if (issuer === '현대카드') return 'acc_hyundai';
+  if (issuer === '우리은행') return 'acc_woori';
+  return '';
+}
+
+/**
+ * 청구 스케줄 = "언제 얼마가 나가나".
+ *   일시불   -> 다음 결제일 1건
+ *   N개월 할부 -> 다음 결제일부터 N건 (1원 단위 잔돈은 첫 회차에 몰아준다)
+ *   리볼빙   -> 결제일마다 약정 비율로 다시 계산한다 (M4)
+ * 체크/계좌 거래는 즉시 결제이므로 스케줄을 만들지 않는다.
+ */
+function buildSchedules_(txn) {
+  if (txn.type !== 'expense') return [];
+  const account = findBy_('Account', 'id', txn.accountId);
+  if (!account || account.type !== 'card') return [];
+
+  const billingDay = Number(account.billingDay) || 5;
+  const months = Math.max(1, Number(txn.installmentMonths) || 1);
+  const base = Math.floor(txn.amount / months);
+  const remainder = txn.amount - base * months;
+
+  const occurred = new Date(txn.occurredAt);
+  const out = [];
+  for (let i = 0; i < months; i++) {
+    // 사용월의 다음 달 결제일부터 시작한다
+    const due = new Date(occurred.getFullYear(), occurred.getMonth() + 1 + i, billingDay);
+    out.push({
+      id: newId_('sch'),
+      txnId: txn.id,
+      accountId: txn.accountId,
+      dueDate: Utilities.formatDate(due, CONFIG.timezone, 'yyyy-MM-dd'),
+      amount: base + (i === 0 ? remainder : 0),
+      seq: i + 1,
+      kind: months > 1 ? 'installment' : 'lump',
+      settled: false,
+      settledTxnId: '',
+    });
+  }
+  return out;
+}
+
+/**
+ * 앵커 기록.
+ *   우리은행 잔액   -> 계좌 잔액 대조
+ *   현대카드 월 누적 -> 이번 달 카드 사용 합계 대조 (사이클이 1일 기준이라 경계가 일치한다)
+ * computed와 diff는 대사 실행 시 채운다.
+ */
+function recordAnchors_(parsed, rawId) {
+  if (parsed.balance !== null && parsed.balance !== undefined) {
+    append_('Anchor', {
+      id: newId_('anc'), at: toIso_(parsed.occurredAt),
+      accountId: accountFor_(parsed.issuer), kind: 'balance',
+      reported: parsed.balance, computed: '', diff: '',
+      status: 'pending', rawMessageId: rawId,
+    });
+  }
+  if (parsed.cumulative !== null && parsed.cumulative !== undefined) {
+    append_('Anchor', {
+      id: newId_('anc'), at: toIso_(parsed.occurredAt),
+      accountId: accountFor_(parsed.issuer), kind: 'cumulative',
+      reported: parsed.cumulative, computed: '', diff: '',
+      status: 'pending', rawMessageId: rawId,
+    });
+  }
+}
+
+/** 알림 메뉴에 올릴 카테고리 후보. 최근에 많이 쓴 순. */
+function topCategories_(n) {
+  const counts = {};
+  readAll_('Transaction').forEach(function (t) {
+    if (!t.categoryId) return;
+    counts[t.categoryId] = (counts[t.categoryId] || 0) + 1;
+  });
+  const categories = readAll_('Category').filter(function (c) { return c.kind === 'expense'; });
+  categories.sort(function (a, b) { return (counts[b.id] || 0) - (counts[a.id] || 0); });
+  return categories.slice(0, n).map(function (c) {
+    return { id: c.id, name: c.name, icon: c.icon };
+  });
+}
+
+/**
+ * 파서를 고친 뒤 과거 문자를 다시 돌린다.
+ * 원문을 무손실로 보관하는 이유가 이것이다.
+ */
+function reprocessAll(fromVersion) {
+  const target = fromVersion === undefined ? CONFIG.parserVersion : fromVersion;
+  const rows = readAll_('RawMessage').filter(function (r) {
+    return Number(r.parserVersion) < target || r.parsedOk !== true;
+  });
+  let fixed = 0;
+  rows.forEach(function (r) {
+    const parsed = parseMessage_(r.body, r.sender, new Date(r.receivedAt));
+    update_('RawMessage', r.id, {
+      parserVersion: CONFIG.parserVersion,
+      parsedOk: parsed.ok,
+      parseNote: parsed.note,
+    });
+    if (parsed.ok) fixed++;
+  });
+  return { scanned: rows.length, nowParsed: fixed };
+}

@@ -1,0 +1,6 @@
+{
+  "name": "budget-shared",
+  "private": true,
+  "type": "module",
+  "description": "플랫폼을 타지 않는 로직. 함수와 브라우저가 같은 파일을 쓴다."
+}

@@ -1,0 +1,66 @@
+# 커밋하면 Firebase에 배포한다.
+#
+# 이 저장소가 Firebase를 고치는 유일한 통로다. 콘솔에서 손으로 고치면
+# 무엇을 왜 바꿨는지 남지 않으므로, 규칙과 함수와 화면을 전부 여기 둔다.
+#
+# 필요한 것: 저장소 Secrets 에 FIREBASE_SERVICE_ACCOUNT
+#   (Firebase 콘솔 > 프로젝트 설정 > 서비스 계정 > 새 비공개 키 생성 한 JSON 전체)
+
+name: Deploy to Firebase
+
+on:
+  push:
+    branches:
+      - main
+      - claude/iphone-budget-app-review-zmr3x5
+    paths:
+      - 'firebase/**'
+      - '.github/workflows/firebase.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: firebase-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 순수 로직은 한 곳(shared/)에만 둔다. 함수도 화면도 그 복사본을 쓴다.
+      # Firebase는 functions/ 밖의 파일을 올려 주지 않고, 브라우저는 상위
+      # 폴더를 못 읽으므로 배포 직전에 양쪽으로 복사한다.
+      - name: 공용 로직 복사
+        run: |
+          cp -r firebase/shared firebase/functions/shared
+          cp -r firebase/shared firebase/public/shared
+
+      - name: 테스트
+        run: node --test firebase/shared/*.test.js
+
+      - name: 인증 정보 준비
+        env:
+          SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$SA" ]; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT 시크릿이 없습니다."
+            exit 1
+          fi
+          printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - name: 함수 의존성 설치
+        working-directory: firebase/functions
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: 배포
+        working-directory: firebase
+        run: npx --yes firebase-tools@13 deploy --only hosting,firestore,functions --non-interactive
+
+      - name: 주소
+        run: echo "https://budget-13aec.web.app" >> "$GITHUB_STEP_SUMMARY"

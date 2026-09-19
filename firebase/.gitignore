@@ -1,0 +1,5 @@
+# shared/ 는 배포 직전에 복사해 넣는 것이라 저장소에 두지 않는다.
+# 원본은 firebase/shared/ 하나뿐이다.
+functions/shared/
+public/shared/
+functions/node_modules/

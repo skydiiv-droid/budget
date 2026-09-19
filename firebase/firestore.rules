@@ -1,0 +1,30 @@
+rules_version = '2';
+
+// 혼자 쓰는 가계부다. 규칙은 하나만 지킨다 —
+// 자기 칸 말고는 누구도 못 읽고 못 쓴다.
+//
+// 문자를 받아 넣는 함수는 Admin SDK로 돌아 이 규칙을 거치지 않는다.
+// 그쪽은 토큰으로 막는다. 사람은 로그인으로, 기계는 토큰으로.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 주인이 누구인지 한 번만 적는다. 처음 로그인한 사람이 주인이 되고,
+    // 그다음부터는 그 사람만 읽고 쓸 수 있다.
+    match /config/owner {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if request.auth != null
+                            && resource.data.uid == request.auth.uid;
+    }
+
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // 나머지는 전부 막는다
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

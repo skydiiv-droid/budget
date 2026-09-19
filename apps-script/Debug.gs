@@ -47,7 +47,7 @@ function checkSetup() {
   }
 
   Object.keys(SCHEMA).forEach(function (name) {
-    if (!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)) {
+    if (!spreadsheet_().getSheetByName(name)) {
       problems.push('시트 없음: ' + name + ' — setup() 을 실행하세요.');
     }
   });
@@ -65,4 +65,43 @@ function checkSetup() {
                ' · 거래 ' + readAll_('Transaction').length + '건');
   }
   return problems;
+}
+
+/**
+ * 시트를 못 찾을 때 무엇이 잘못됐는지 그대로 찍는다.
+ * 추측하지 않도록, 실제로 무엇이 있고 무엇이 없는지 보여 준다.
+ */
+function diagnose() {
+  let ss = null;
+  try {
+    ss = spreadsheet_();
+  } catch (e) {
+    Logger.log('✗ ' + e.message);
+    return { ok: false, reason: String(e.message) };
+  }
+
+  Logger.log('파일   : ' + ss.getName());
+  Logger.log('주소   : ' + ss.getUrl());
+  const names = ss.getSheets().map(function (s) { return s.getName(); });
+  Logger.log('시트 ' + names.length + '개: ' + names.join(', '));
+
+  const missing = Object.keys(SCHEMA).filter(function (n) { return names.indexOf(n) < 0; });
+  if (!missing.length) {
+    Logger.log('✓ 스키마의 시트가 전부 있습니다.');
+    return { ok: true, sheets: names };
+  }
+
+  Logger.log('없는 시트: ' + missing.join(', '));
+  Logger.log('만들어 봅니다…');
+  try {
+    const made = ensureSheets_();
+    const after = spreadsheet_().getSheets().map(function (s) { return s.getName(); });
+    const still = Object.keys(SCHEMA).filter(function (n) { return after.indexOf(n) < 0; });
+    Logger.log(still.length ? ('✗ 아직 없음: ' + still.join(', '))
+                            : ('✓ ' + made + '개를 만들었습니다. 이제 다시 열어 보세요.'));
+    return { ok: !still.length, made: made, missing: still };
+  } catch (e) {
+    Logger.log('✗ 만들다 실패: ' + e.message);
+    return { ok: false, reason: String(e.message) };
+  }
 }

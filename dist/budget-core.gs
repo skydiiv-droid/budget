@@ -166,7 +166,7 @@ const SCHEMA = {
  * 시트가 없어서 실패하는 일은 없다.
  */
 function ensureSheets_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = spreadsheet_();
   let made = 0;
   Object.keys(SCHEMA).forEach(function (name) {
     if (ss.getSheetByName(name)) return;
@@ -176,7 +176,28 @@ function ensureSheets_() {
     sheet.setFrozenRows(1);
     made++;
   });
+  // 만든 시트가 곧바로 보이도록 쓰기를 밀어낸다.
+  // 이걸 안 하면 방금 만든 시트를 바로 뒤에서 못 찾는 일이 있다.
+  if (made) SpreadsheetApp.flush();
   return made;
+}
+
+/**
+ * 스프레드시트 핸들.
+ *
+ * 스크립트가 시트에 붙어 있지 않으면(따로 만든 프로젝트) getActiveSpreadsheet()가
+ * 비어 온다. 그때는 무엇이 잘못됐는지 알려 주고 멈춘다 — 엉뚱한 곳에 쓰는 것보다
+ * 낫다. SHEET_ID 스크립트 속성이 있으면 그 파일을 쓴다.
+ */
+function spreadsheet_() {
+  const id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
+  if (id) return SpreadsheetApp.openById(id);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss) return ss;
+
+  throw new Error('스프레드시트를 찾을 수 없습니다. 스크립트가 시트에 붙어 있지 않은 것 같아요. ' +
+                  '프로젝트 설정 > 스크립트 속성에 SHEET_ID 로 시트 주소의 /d/ 와 /edit 사이 값을 넣어 주세요.');
 }
 
 function setup() {
@@ -186,22 +207,23 @@ function setup() {
   seedRules_();
   seedMerchants_();
   seedSettings_();
-  SpreadsheetApp.getActiveSpreadsheet().toast('시트 준비 완료');
+  spreadsheet_().toast('시트 준비 완료');
 }
 
 function sheet_(name) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(name);
+  let sheet = spreadsheet_().getSheetByName(name);
   if (sheet) return sheet;
 
   // 스키마에 있는 시트인데 없다면 만들어 준다. 새 시트가 추가됐을 때
   // 사용자가 어느 함수를 먼저 돌려야 하는지 알아야 할 이유가 없다.
   if (SCHEMA[name]) {
     ensureSheets_();
-    sheet = ss.getSheetByName(name);
+    // 핸들을 다시 받는다. 앞서 받아 둔 것은 방금 만든 시트를 모른다.
+    sheet = spreadsheet_().getSheetByName(name);
     if (sheet) return sheet;
   }
-  throw new Error('시트를 만들 수 없습니다: ' + name);
+  throw new Error('시트를 만들 수 없습니다: ' + name +
+                  ' — 편집기에서 diagnose() 를 실행해 로그를 확인해 주세요.');
 }
 
 /** 시트를 객체 배열로 읽는다. */
@@ -2482,7 +2504,7 @@ function checkSetup() {
   }
 
   Object.keys(SCHEMA).forEach(function (name) {
-    if (!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)) {
+    if (!spreadsheet_().getSheetByName(name)) {
       problems.push('시트 없음: ' + name + ' — setup() 을 실행하세요.');
     }
   });
@@ -2500,4 +2522,43 @@ function checkSetup() {
                ' · 거래 ' + readAll_('Transaction').length + '건');
   }
   return problems;
+}
+
+/**
+ * 시트를 못 찾을 때 무엇이 잘못됐는지 그대로 찍는다.
+ * 추측하지 않도록, 실제로 무엇이 있고 무엇이 없는지 보여 준다.
+ */
+function diagnose() {
+  let ss = null;
+  try {
+    ss = spreadsheet_();
+  } catch (e) {
+    Logger.log('✗ ' + e.message);
+    return { ok: false, reason: String(e.message) };
+  }
+
+  Logger.log('파일   : ' + ss.getName());
+  Logger.log('주소   : ' + ss.getUrl());
+  const names = ss.getSheets().map(function (s) { return s.getName(); });
+  Logger.log('시트 ' + names.length + '개: ' + names.join(', '));
+
+  const missing = Object.keys(SCHEMA).filter(function (n) { return names.indexOf(n) < 0; });
+  if (!missing.length) {
+    Logger.log('✓ 스키마의 시트가 전부 있습니다.');
+    return { ok: true, sheets: names };
+  }
+
+  Logger.log('없는 시트: ' + missing.join(', '));
+  Logger.log('만들어 봅니다…');
+  try {
+    const made = ensureSheets_();
+    const after = spreadsheet_().getSheets().map(function (s) { return s.getName(); });
+    const still = Object.keys(SCHEMA).filter(function (n) { return after.indexOf(n) < 0; });
+    Logger.log(still.length ? ('✗ 아직 없음: ' + still.join(', '))
+                            : ('✓ ' + made + '개를 만들었습니다. 이제 다시 열어 보세요.'));
+    return { ok: !still.length, made: made, missing: still };
+  } catch (e) {
+    Logger.log('✗ 만들다 실패: ' + e.message);
+    return { ok: false, reason: String(e.message) };
+  }
 }

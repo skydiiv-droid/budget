@@ -14,7 +14,12 @@ import { dirname, join } from 'node:path';
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const css = readFileSync(join(PUBLIC, 'app.css'), 'utf8');
 
-const defined = new Set([...css.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+// :root 말고 화면을 그리면서 style="--h:122px" 처럼 그 자리에서 정하는 것도 있다
+const js0 = readFileSync(join(PUBLIC, 'app.js'), 'utf8');
+const defined = new Set([
+  ...[...css.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]),
+  ...[...js0.matchAll(/style="(--[a-z0-9-]+):/g)].map((m) => m[1]),
+]);
 
 test('색 이름을 정의 없이 쓰지 않는다', () => {
   const missing = new Map();

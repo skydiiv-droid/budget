@@ -19,6 +19,9 @@ import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMon
   from './shared/ledger.js';
 import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf } from './shared/accounts.js';
 import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
+import { trend, categoryBudgets } from './shared/ledger.js';
+import { search, knownTags, parseTags } from './shared/search.js';
+import { toCSV } from './shared/csv.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
 import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
@@ -34,7 +37,8 @@ let db, auth, uid, projectId, D = null;
 /** 지금 펼쳐 둔 큰 갈래. "어느 화면의 어느 거래" 별로 따로 기억한다. */
 const openMain = new Map();
 
-/** 내역에서 보고 있는 달 · 펼쳐 둔 갈래 · 고치는 중인 거래. */
+/** 내역에서 보고 있는 달 · 펼쳐 둔 갈래 · 고치는 중인 거래 · 찾는 말. */
+let histQuery = '';
 let histMonth = null;
 let histOpen = null;
 let editTxn = null;
@@ -299,7 +303,8 @@ async function refresh() {
   const ingest = ingestSnap?.exists() ? ingestSnap.data() : {};
   D = { categories, rules, merchants, accounts, recurring, settlements,
         txns, raw, settings, ingest };
-  D.ledger = ledger({ transactions: txns, recurring, settlements, accounts, raw, settings });
+  D.ledger = ledger({ transactions: txns, recurring, settlements, accounts,
+                      categories, raw, settings });
 
   $('boot').hidden = true;
   $('app').hidden = false;
@@ -354,6 +359,19 @@ function render() {
   renderSetup();
   syncAccountForm();
   syncGoalForm();
+  renderTagList();
+}
+
+/** 쓴 적 있는 태그를 자동완성으로 띄운다. 같은 걸 두 가지로 적으면 묶이지 않는다. */
+function renderTagList() {
+  let list = $('tagList');
+  if (!list) {
+    list = document.createElement('datalist');
+    list.id = 'tagList';
+    document.body.appendChild(list);
+  }
+  list.innerHTML = knownTags(D.txns)
+    .map((t) => `<option value="${esc(t.name)}">`).join('');
 }
 
 // 미분류는 늘 맨 뒤다. 새로 만든 갈래가 그 뒤로 가면 어색하다.
@@ -565,15 +583,80 @@ const sumCounted = (rows) => rows.reduce((s, r) => s + (r.counted ? r.net : 0), 
 const dateLabel = (d) => `${d.getMonth() + 1}월 ${d.getDate()}일`;
 
 /**
- * 쓴 돈을 보는 곳.
+ * 달마다 얼마 썼나.
  *
- * 홈은 "앞으로 어떻게 할 것인가"를 말하고 여기는 "무엇을 했는가"를 말한다.
- * 둘을 한 화면에 욱여넣으면 둘 다 안 읽힌다.
+ * 한 줄기뿐이라 색은 하나다 — 막대가 길수록 진하게 칠하면 길이가 말하는 걸
+ * 색으로 한 번 더 말하는 셈이고, 그러느라 색이라는 칸을 버리게 된다.
+ * 이번 달만 빗금으로 가른다. 아직 안 끝났으니까.
  *
- * 합계 → 어디에 썼나 → 날짜별 목록 순서다. 큰 것부터 작은 것으로 내려가야
- * 어디가 새는지 보인다.
+ * 숫자는 골라서 붙인다. 막대마다 숫자를 달면 아무도 안 읽는다.
  */
+function renderTrend(months) {
+  if (months.length < 2) return '';
+  const limit = Number(D.settings.variableBudget || 0);
+  const top = Math.max(limit, ...months.map((m) => Math.max(m.total, m.projected || 0))) || 1;
+  const H = 122;
+  const y = (v) => Math.round((v / top) * H);
+
+  const most = months.reduce((a, b) => (b.total > a.total ? b : a), months[0]);
+  const worth = (m) => m.total > 0 && (m.current || m === most);
+
+  let bars = '';
+  for (const m of months) {
+    const h = m.total > 0 ? Math.max(4, y(m.total)) : 0;
+    // 이 속도로 갔을 때의 끝값. 칠한 막대와 2px 띄워 둘이 붙어 보이지 않게 한다.
+    const cap = m.current && m.projected > m.total ? Math.max(4, y(m.projected) - h - 2) : 0;
+
+    bars += `<button type="button" class="tb${m.current ? ' now' : ''}" data-trend="${m.month}"
+      aria-label="${esc(m.label)} ${won(m.total)}원">
+      <span class="tb-stack">
+        ${h ? `<i class="tb-b" style="height:${h}px"></i>` : '<i class="tb-z"></i>'}
+        ${cap ? `<i class="tb-p" style="height:${cap}px;bottom:${h + 2}px"></i>` : ''}
+        ${/* 숫자는 실제로 쓴 만큼의 높이에 붙인다. 옅은 칸 꼭대기에 붙이면
+             아직 쓰지도 않은 금액을 쓴 것처럼 읽힌다. */''}
+        ${worth(m) ? `<span class="tb-v num" style="bottom:${h + 5}px">${
+          won(Math.round(m.total / 1000))}</span>` : ''}
+      </span>
+      <span class="tb-l">${esc(m.label)}</span></button>`;
+  }
+
+  return `<div class="card">
+    <div class="row"><span class="lbl grow">달마다 쓴 돈</span>
+      <span class="muted">천 원 단위</span></div>
+    <div class="trend" style="--h:${H}px">
+      ${limit ? `<div class="tb-limit" style="bottom:${y(limit) + 17}px">
+        <span>예산 <b class="num">${won(Math.round(limit / 1000))}</b></span></div>` : ''}
+      ${bars}
+    </div>
+    ${months.at(-1).current ? `<div class="muted" style="margin-top:12px">
+      옅은 칸은 <b>이 속도로 갔을 때</b>의 이달 끝값이에요. 아직 안 끝난 달이라 그냥 견주면 낮게 보입니다.</div>` : ''}
+  </div>`;
+}
+
 function renderHistory() {
+  const box = `<div class="card" style="padding:12px 14px">
+    <input id="histSearch" type="search" autocomplete="off" placeholder="가게 · 카테고리 · 금액 · 태그로 찾기"
+      value="${esc(histQuery)}" style="min-height:42px"></div>`;
+
+  // 찾는 중에는 달을 넘나들지 않는다. "그때 그 병원"이 몇 월인지 알면 안 찾는다.
+  if (histQuery.trim()) {
+    const hits = search(histQuery, { transactions: D.txns, categories: D.categories });
+    const total = hits.reduce((sum, t) => sum + (t.type === 'expense' ? Number(t.amount || 0) : 0), 0);
+    let f = box;
+    if (!hits.length) {
+      f += `<div class="card"><div class="empty">「${esc(histQuery)}」로 찾은 게 없어요.<br>
+        이름 일부만 쳐도 돼요.</div></div>`;
+    } else {
+      f += `<div class="card">
+        <div class="row"><span class="lbl grow">찾은 것 ${hits.length}건</span>
+          <span class="num" style="font-size:15px;font-weight:700">${won(total)}</span></div></div>
+        <div class="card" style="padding:4px 16px">${hits.slice(0, 80).map(txRow).join('')}</div>`;
+      if (hits.length > 80) f += `<div class="muted" style="text-align:center;margin-top:8px">앞 80건만 보여요</div>`;
+    }
+    $('history').innerHTML = f;
+    return;
+  }
+
   const month = histMonth || D.ledger.month;
   const [y, m] = month.split('-');
   const rows = monthSpending(histData(), month);
@@ -592,7 +675,7 @@ function renderHistory() {
          + `${pct > 0 ? '+' : pct < 0 ? '−' : '±'}${Math.abs(pct)}%</b>`;
   }
 
-  let h = `<div class="card">
+  let h = box + `<div class="card">
     <div class="row">
       <button type="button" class="act ghost small" data-month="-1" aria-label="지난달">←</button>
       <div class="grow" style="text-align:center">
@@ -614,20 +697,37 @@ function renderHistory() {
     return;
   }
 
+  h += renderTrend(trend(histData(), 6));
+
+  const limits = categoryBudgets(
+    Object.fromEntries(b.items.flatMap((i) => [[i.id, i.amount], ...i.subs.map((s) => [s.id, 0])])),
+    D.settings, D.categories);
+  const limitOf = (id) => limits.items.find((i) => i.id === id);
+
   const top = b.items[0]?.amount || 1;
   h += `<div class="card">
     <div class="lbl">어디에 썼나</div>
-    <div class="muted" style="margin:4px 0 6px">큰 갈래를 누르면 그 안이 열려요.</div>`;
+    <div class="muted" style="margin:4px 0 6px">큰 갈래를 누르면 그 안이 열려요.${
+      limits.withLimit.length ? ' 예산을 잡은 갈래는 예산에 견줘 보여줍니다.' : ''}</div>`;
   for (const it of b.items) {
     const open = histOpen === it.id;
+    const cap = limitOf(it.id);
     h += `<button type="button" class="brk" data-open="${it.id}" aria-expanded="${open}">
       <span class="brk-ico">${esc(catIcon(it.id))}</span>
       <span class="grow">
         <span class="brk-name">${esc(catName(it.id))}
-          <span class="muted" style="font-weight:400">${it.count}건</span></span>
-        <span class="bar"><i style="width:${Math.max(3, Math.round((it.amount / top) * 100))}%;background:var(--blue)"></i></span>
+          <span class="muted" style="font-weight:400">${it.count}건${
+            cap?.limit ? ` · 예산 <span class="num">${won(cap.limit)}</span>` : ''}</span></span>
+        <span class="bar"><i style="width:${cap?.limit
+          ? Math.min(100, Math.max(3, cap.pct))
+          : Math.max(3, Math.round((it.amount / top) * 100))}%;background:${
+          cap?.over ? 'var(--spend)' : 'var(--blue)'}"></i></span>
       </span>
-      <span class="brk-amt num">${won(it.amount)}<br><span class="muted">${it.pct}%</span></span>
+      <span class="brk-amt num">${won(it.amount)}<br><span class="muted"${
+        cap?.over ? ' style="color:var(--spend);font-weight:700"' : ''}>${
+        /* 한 칸에 두 뜻을 섞으면 안 된다 — 43% 가 예산의 43% 인지 전체의 43% 인지
+           알 길이 없다. 막대가 무엇에 견준 것인지 글자로 말해 준다. */''}${
+        cap?.limit ? `${cap.over ? '예산 넘음' : `예산 ${cap.pct}%`}` : `비중 ${it.pct}%`}</span></span>
     </button>`;
     if (!open) continue;
     for (const sub of it.subs) {
@@ -663,7 +763,8 @@ function renderHistory() {
 function txRow(r) {
   const open = editTxn === r.id;
   const cat = r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 아직 안 정함';
-  const note = [cat, r.cardName, r.counted ? '' : '예산에서 뺌'].filter(Boolean).join(' · ');
+  const note = [cat, r.cardName, r.counted ? '' : '예산에서 뺌',
+                ...(r.tags || []).map((t) => `#${t}`), r.memo].filter(Boolean).join(' · ');
 
   let h = `<button type="button" class="tx${r.counted ? '' : ' off'}"
     data-tx="${r.id}" aria-expanded="${open}">
@@ -703,6 +804,12 @@ function txEdit(r) {
           <input name="amount" inputmode="numeric" value="${won(r.amount)}"></div>
         <div class="field"><label>가게 이름</label>
           <input name="merchantRaw" value="${esc(r.merchantRaw || '')}"></div></div>
+      <div class="field"><label>태그 <span class="muted" style="font-weight:400">없어도 돼요</span></label>
+        <input name="tags" value="${esc((r.tags || []).join(', '))}"
+          placeholder="제주여행, 모임" list="tagList">
+        <div class="muted" style="margin-top:6px">쉼표로 나눠요. 카테고리는 하나만 달 수 있지만 태그는 여럿 달 수 있어요.</div></div>
+      <div class="field"><label>메모 <span class="muted" style="font-weight:400">없어도 돼요</span></label>
+        <input name="memo" value="${esc(r.memo || '')}" placeholder="누구랑, 왜" maxlength="60"></div>
       <label class="check"><input type="checkbox" name="excludeFromBudget"
         ${r.excludeFromBudget ? 'checked' : ''}> 이 건은 예산에서 빼기 (더치페이·환불 등)</label>
       <div style="display:flex;gap:7px">
@@ -1072,9 +1179,9 @@ function renderSetup() {
         <input name="balance" inputmode="numeric" placeholder="500,000"></div>
       <div class="field" data-when="checking loan"><label>이자율 (연 %)</label>
         <input name="rate" inputmode="decimal" placeholder="19.9"></div></div>
-    <div class="muted" data-when="checking" style="margin:-4px 0 12px">
-      마이너스통장을 쓰고 있으면 잔액을 <b>음수</b>로 넣어 주세요 (예: -1,400,000).
-      그만큼이 빚으로 잡힙니다.</div>
+    <label class="check" data-when="checking" style="margin:-2px 0 12px">
+      <input type="checkbox" name="isMinus">
+      <span>지금 마이너스예요 — 그만큼이 빚으로 잡힙니다 (마이너스통장)</span></label>
 
     <div class="fields" data-when="card">
       <div class="field"><label>카드 종류</label>
@@ -1110,7 +1217,11 @@ function renderSetup() {
       <button type="submit" class="act primary" style="width:100%">비밀번호 저장</button>
       <div class="note warn" style="margin:12px 0 0">바꾸면 아이폰 <b>단축어의 token 칸도</b> 같이 고쳐야 문자가 계속 들어와요.</div></form>`;
 
-  const etc = `<div style="display:flex;gap:7px">
+  const etc = `<div class="muted" style="margin-bottom:10px">내보내면 엑셀이나 다른 가계부에서 열 수 있어요.
+      데이터가 이 앱 안에만 있으면 앱이 인질을 잡고 있는 거니까요.</div>
+    <button type="button" class="act tint" style="width:100%;margin-bottom:9px" id="exportCsv">
+      내역 내보내기 (CSV)</button>
+    <div style="display:flex;gap:7px">
       <a class="act ghost" href="/data" style="flex:1;text-align:center;text-decoration:none;line-height:22px">원본 데이터</a>
       <button type="button" class="act ghost" id="signout" style="flex:1">로그아웃</button>
     </div>`;
@@ -1128,6 +1239,10 @@ function renderSetup() {
     fold('cards', '카드',
       cardRows.length ? `${cardRows.length}장` : '없음', cards),
     fold('add', '계좌 · 카드 · 빚 넣기', '한 군데서 다 넣어요', form),
+    fold('catbudget', '갈래별 예산',
+      D.ledger.byCategory.withLimit.length
+        ? `${D.ledger.byCategory.withLimit.length}개 · ${won(D.ledger.byCategory.limitTotal)}`
+        : '안 잡음', renderCategoryBudgets()),
     fold('cats', '카테고리',
       `큰 갈래 ${cats.filter((c) => !c.parentId).length} · 하위 ${cats.filter((c) => c.parentId).length}`,
       renderCategories()),
@@ -1283,6 +1398,43 @@ function fold(key, title, summary, body) {
 }
 
 const KIND_LABEL = { expense: '지출', income: '수입', transfer: '옮김' };
+
+/**
+ * 갈래별 예산.
+ *
+ * 생활비 총액 하나만 잡으면 "넘었다"는 알아도 어디서 넘었는지는 모른다.
+ * 큰 갈래에만 잡는다 — 배달 · 외식 · 카페에 따로 잡으라고 하면 아무도 안 잡는다.
+ */
+function renderCategoryBudgets() {
+  const limits = D.settings.categoryBudgets || {};
+  const used = Object.fromEntries(D.ledger.byCategory.items.map((i) => [i.id, i.used]));
+  const sum = mainCats().reduce((s, c) => s + Number(limits[c.id] || 0), 0);
+  const total = Number(D.settings.variableBudget || 0);
+
+  let h = `<div class="muted" style="margin-bottom:12px">잡은 갈래는 내역 화면에서 예산에 견줘 보여줘요.
+    안 잡은 갈래는 그냥 쓴 금액만 나옵니다. 전부 잡을 필요 없어요 — 잘 새는 데만 잡으면 돼요.</div>
+    <form data-form="catbudget">`;
+
+  for (const c of mainCats()) {
+    const now = Number(used[c.id] || 0);
+    h += `<div class="item">
+      <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(c.icon || '')} ${esc(c.name)}</span><br>
+        <span class="muted">이 달에 <span class="num">${won(now)}</span> 씀</span></span>
+      <span class="acts"><input name="${c.id}" inputmode="numeric" placeholder="안 잡음"
+        value="${limits[c.id] ? won(limits[c.id]) : ''}"
+        style="width:110px;min-height:38px;font-size:13px;text-align:right"></span></div>`;
+  }
+
+  h += `<div class="hr"></div>
+    <div class="row" style="margin-bottom:12px">
+      <span class="grow" style="font-size:13px;font-weight:600">잡은 예산 합</span>
+      <span class="num" style="font-size:14px;font-weight:700;color:${
+        total && sum > total ? 'var(--spend)' : 'var(--ink)'}">${won(sum)}</span></div>
+    ${total ? `<div class="muted" style="margin:-6px 0 12px">생활비 예산은 <span class="num">${won(total)}</span>이에요${
+      sum > total ? ' — 갈래별로 잡은 게 더 많아요.' : '.'}</div>` : ''}
+    <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
+  return h;
+}
 
 /**
  * 카테고리를 직접 만들고 고치고 지운다.
@@ -1505,7 +1657,10 @@ async function saveDoc(kind, values) {
       id: ref.id, name, type,
       // 카드는 잔액을 쓰지 않는다 — 얼마 나갈지는 거래에서 센다.
       // 빚은 갚아야 할 금액이라 늘 양수다. 마이너스통장만 음수를 그대로 둔다.
-      balance: type === 'card' ? 0 : (type === 'loan' ? Math.abs(amount) : amount),
+      // 아이폰 숫자 키패드에는 빼기 기호가 없다. 부호를 치게 하는 대신 물어본다.
+      balance: type === 'card' ? 0
+        : (type === 'loan' ? Math.abs(amount)
+        : (type === 'checking' && values.isMinus === true ? -Math.abs(amount) : Math.abs(amount))),
       rate: Number(values.rate) || 0,
       cardType: type === 'card' ? (values.cardType || 'credit') : '',
       billingDay: Number(values.billingDay) || null,
@@ -1556,6 +1711,22 @@ async function saveDoc(kind, values) {
  * 토큰 없이 보내면 함수가 unauthorized 로 되받는데, 그 대답이 오는 것 자체가
  * 주소가 살아 있다는 뜻이다. 주소를 손으로 옮겨 적기 전에 확인하는 게 낫다.
  */
+/** 내보내기. 파일로 떨어뜨려 놓으면 어디서든 연다. */
+function exportCsv() {
+  const csv = toCSV(D.txns, { categories: D.categories, accounts: D.accounts });
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `budget-${new Date().toISOString().slice(0, 10)}.csv`;
+  // 문서에 안 붙인 링크는 브라우저가 파일 이름을 흘린다. 붙였다 떼는 게 확실하다.
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`${D.txns.length}건을 내보냈어요`);
+}
+
 async function pingIngest() {
   if (!ingestUrl()) return toast('주소를 먼저 저장해 주세요');
   toast('두드려 보는 중…');
@@ -1708,8 +1879,9 @@ document.addEventListener('click', guard(async (e) => {
         field.value = (v === null || v === undefined) ? '' : String(v);
       }
       if (kind === 'accounts') {
-        // 마이너스통장은 음수 그대로 보여야 고칠 수 있다
-        form.elements.balance.value = row.type === 'card' ? '' : won(row.balance);
+        // 화면에는 늘 양수로 보여 주고, 마이너스인지는 체크로 말한다
+        form.elements.balance.value = row.type === 'card' ? '' : won(Math.abs(row.balance || 0));
+        form.elements.isMinus.checked = Number(row.balance || 0) < 0;
         syncAccountForm();
       }
       const box = form.closest('.fold');
@@ -1731,6 +1903,7 @@ document.addEventListener('click', guard(async (e) => {
 
   if (e.target.id === 'pingIngest') return pingIngest();
 
+  if (e.target.id === 'exportCsv') return exportCsv();
   if (e.target.id === 'peek') return peek();
   if (e.target.id === 'quickOpen') return openQuick();
   if (e.target.closest('[data-close]')) return closeQuick();
@@ -1789,6 +1962,15 @@ document.addEventListener('change', guard(async (e) => {
  * 줄을 숨기기만 한다.
  */
 document.addEventListener('input', (e) => {
+  if (e.target.id === 'histSearch') {
+    histQuery = e.target.value;
+    editTxn = null;
+    renderHistory();
+    // 다시 그리면서 손이 칸에서 떨어진다. 치던 자리로 돌려놓는다.
+    const box = $('histSearch');
+    if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+    return;
+  }
   if (e.target.id !== 'ruleFilter') return;
   const q = e.target.value.trim();
   for (const el of document.querySelectorAll('[data-rulekey]')) {
@@ -1853,10 +2035,23 @@ document.addEventListener('submit', guard(async (e) => {
     await updateDoc(doc(col('txns'), form.dataset.txn), {
       amount,
       merchantRaw: String(values.merchantRaw || '').trim(),
+      tags: parseTags(values.tags),
+      memo: String(values.memo || '').trim().slice(0, 60),
       excludeFromBudget: values.excludeFromBudget === true,
     });
     await refresh();
     return toast('고쳤어요');
+  }
+
+  if (form.dataset.form === 'catbudget') {
+    const limits = {};
+    for (const [id, v] of Object.entries(values)) {
+      const n = parseAmount(v) || 0;
+      if (n > 0) limits[id] = n;
+    }
+    await setDoc(doc(db, 'users', uid, 'meta', 'settings'), { categoryBudgets: limits }, { merge: true });
+    await refresh();
+    return toast(Object.keys(limits).length ? `${Object.keys(limits).length}개 갈래에 예산을 잡았어요` : '예산을 다 지웠어요');
   }
 
   if (form.dataset.form === 'goal') {

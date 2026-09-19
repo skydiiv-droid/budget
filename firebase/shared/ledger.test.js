@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ledger, matchRecurring, monthSpending, breakdown, shiftMonth, monthWindow,
-         sameSpanLastMonth, pace } from './ledger.js';
+         sameSpanLastMonth, pace, trend } from './ledger.js';
 
 const NOW = new Date(2026, 8, 20, 12, 0);   // 2026-09-20
 const SETTINGS = { monthlyIncome: 2800000, variableBudget: 1300000, cycleStartDay: 1 };
@@ -267,4 +267,69 @@ test('여력이 없으면 몇 달 걸리는지 말하지 않는다', () => {
   const g = goal({ kind: 'payoff', startAmount: 4_000_000 },
                  { settings: { monthlyIncome: 100_000, variableBudget: 500_000 } });
   assert.equal(g.paceMonths, null, '무한대는 답이 아니다');
+});
+
+// ───────────────────────────────────────────────── 갈래별 예산 · 추이
+
+test('하위 칸에 쓴 돈은 큰 갈래 예산으로 접어 올린다', () => {
+  const L = run({
+    categories: CATS,
+    transactions: [
+      { id: 't1', type: 'expense', amount: 40_000, occurredAt: '2026-09-04T10:00:00', categoryId: 'cat_cafe' },
+      { id: 't2', type: 'expense', amount: 60_000, occurredAt: '2026-09-05T10:00:00', categoryId: 'cat_delivery' },
+    ],
+  }, { categoryBudgets: { cat_food: 300_000 } });
+
+  const food = L.byCategory.items.find((i) => i.id === 'cat_food');
+  assert.equal(food.used, 100_000, '배달·외식·카페에 따로 잡으라면 아무도 안 잡는다');
+  assert.equal(food.remaining, 200_000);
+  assert.equal(food.pct, 33);
+  assert.equal(food.over, false);
+});
+
+test('예산을 넘긴 갈래를 센다', () => {
+  const L = run({
+    categories: CATS,
+    transactions: [
+      { id: 't1', type: 'expense', amount: 400_000, occurredAt: '2026-09-04T10:00:00', categoryId: 'cat_cafe' },
+    ],
+  }, { categoryBudgets: { cat_food: 300_000 } });
+  assert.equal(L.byCategory.overCount, 1);
+  assert.equal(L.byCategory.items[0].over, true);
+});
+
+test('예산을 안 잡은 갈래는 넘길 수가 없다', () => {
+  const L = run({
+    categories: CATS,
+    transactions: [
+      { id: 't1', type: 'expense', amount: 900_000, occurredAt: '2026-09-04T10:00:00', categoryId: 'cat_transport' },
+    ],
+  });
+  const t = L.byCategory.items.find((i) => i.id === 'cat_transport');
+  assert.equal(t.used, 900_000);
+  assert.equal(t.pct, null, '기준이 없으면 몇 %인지 말할 수 없다');
+  assert.equal(L.byCategory.overCount, 0);
+});
+
+test('추이는 옛것부터 — 그래프는 왼쪽에서 오른쪽으로 읽는다', () => {
+  const data = { settings: SETTINGS, transactions: [
+    { id: 'a', type: 'expense', amount: 100_000, occurredAt: '2026-07-10T10:00:00' },
+    { id: 'b', type: 'expense', amount: 200_000, occurredAt: '2026-08-10T10:00:00' },
+    { id: 'c', type: 'expense', amount: 150_000, occurredAt: '2026-09-10T10:00:00' },
+  ] };
+  const t = trend(data, 3, NOW);          // 9/20
+  assert.deepEqual(t.map((m) => m.month), ['2026-07', '2026-08', '2026-09']);
+  assert.deepEqual(t.map((m) => m.total), [100_000, 200_000, 150_000]);
+});
+
+test('이번 달은 아직 안 끝났다고 말해 준다', () => {
+  const data = { settings: SETTINGS, transactions: [
+    { id: 'c', type: 'expense', amount: 150_000, occurredAt: '2026-09-10T10:00:00' },
+  ] };
+  const t = trend(data, 2, NOW);
+  const last = t[t.length - 1];
+  assert.equal(last.current, true);
+  assert.ok(last.projected > last.total,
+    '끝난 달과 나란히 두면 "이번 달은 적게 썼네"로 잘못 읽힌다');
+  assert.equal(t[0].projected, t[0].total, '끝난 달은 끝값이 곧 합계다');
 });

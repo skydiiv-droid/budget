@@ -52,14 +52,14 @@ export function matchRecurring(txn, recurring = []) {
 }
 
 /**
- * @param {object} data  { transactions, recurring, settlements, accounts, debts, raw, settings }
+ * @param {object} data  { transactions, recurring, settlements, accounts, categories, raw, settings }
  * @param {string} yyyymm
  * @param {Date}   now    테스트에서 시점을 고정하기 위해 받는다
  */
 export function ledger(data = {}, yyyymm, now = new Date()) {
   const {
     transactions = [], recurring = [], settlements = [],
-    accounts = [], debts = [], raw = [], settings = {},
+    accounts = [], categories = [], raw = [], settings = {},
   } = data;
 
   const month = yyyymm || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -146,6 +146,7 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
     },
     assets: { items: assets, total: assetTotal, net: assetTotal - debtTotal },
     goal: goalProgress(settings, { debtTotal, assetTotal, available }, now),
+    byCategory: categoryBudgets(byCategory, settings, categories),
     cards: { items: roll.bills, total: roll.billTotal },
     inbox: {
       pending: transactions.filter((t) => t.status === 'pendingCategory').length,
@@ -338,4 +339,76 @@ export function goalProgress(settings = {}, now_ = {}, now = new Date()) {
     onTrack: needPerMonth === null ? null : available >= needPerMonth,
     done: remaining <= 0,
   };
+}
+
+// ───────────────────────────────────────────────── 갈래별 예산 · 추이
+
+/**
+ * 갈래별 예산.
+ *
+ * 생활비 총액 하나만 잡으면 "넘었다"는 알아도 어디서 넘었는지는 모른다.
+ * 식비 40만처럼 나눠 두면 터지는 자리가 보인다.
+ *
+ * 하위 칸에 쓴 돈은 큰 갈래로 접어 올린다 — 예산은 큰 갈래에만 잡는다.
+ * 배달 · 외식 · 카페에 따로 예산을 잡으라고 하면 아무도 안 잡는다.
+ */
+export function categoryBudgets(byCategory = {}, settings = {}, categories = []) {
+  const limits = settings.categoryBudgets || {};
+  const mainOf = (id) => {
+    const c = categories.find((x) => x.id === id);
+    return c ? (c.parentId || c.id) : (id || 'cat_unknown');
+  };
+
+  const spent = {};
+  for (const [id, amount] of Object.entries(byCategory)) {
+    const main = mainOf(id);
+    spent[main] = (spent[main] || 0) + Number(amount || 0);
+  }
+
+  const ids = new Set([...Object.keys(spent), ...Object.keys(limits)]);
+  const items = [...ids].map((id) => {
+    const limit = Number(limits[id] || 0);
+    const used = spent[id] || 0;
+    return {
+      id, limit, used,
+      remaining: limit ? Math.max(0, limit - used) : null,
+      pct: limit ? Math.round((used / limit) * 100) : null,
+      over: limit > 0 && used > limit,
+    };
+  }).sort((a, b) => b.used - a.used);
+
+  return {
+    items,
+    withLimit: items.filter((i) => i.limit > 0),
+    overCount: items.filter((i) => i.over).length,
+    limitTotal: items.reduce((s, i) => s + i.limit, 0),
+  };
+}
+
+/**
+ * 달마다 얼마 썼나. 최근 것이 마지막에 온다 — 그래프는 왼쪽에서 오른쪽으로 읽는다.
+ *
+ * 이번 달은 아직 안 끝났다. 끝난 달과 나란히 두면 "이번 달은 적게 썼네"로
+ * 잘못 읽히므로, 지금 속도로 갔을 때의 끝값을 따로 들려 보낸다.
+ */
+export function trend(data = {}, months = 6, now = new Date()) {
+  const { settings = {} } = data;
+  const thisMonth = monthKey(now);
+  const out = [];
+
+  for (let i = months - 1; i >= 0; i--) {
+    const key = shiftMonth(thisMonth, -i);
+    const rows = monthSpending(data, key, now);
+    const total = rows.reduce((sum, r) => sum + (r.counted ? r.net : 0), 0);
+    const current = key === thisMonth;
+    out.push({
+      month: key,
+      label: `${Number(key.split('-')[1])}월`,
+      total,
+      count: rows.length,
+      current,
+      projected: current ? pace(total, key, settings.cycleStartDay, now).projected : total,
+    });
+  }
+  return out;
 }

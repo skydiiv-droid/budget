@@ -78,6 +78,28 @@ button.small{font-size:12px;padding:7px 11px;min-height:36px}
   padding:0 4px;border-radius:9px;background:var(--spend);color:#fff;
   font-size:10.5px;font-weight:700;line-height:17px;text-align:center}
 
+/* 달마다 쓴 돈 — 한 줄기뿐이라 색은 하나. 막대가 길수록 진하게 칠하면
+   길이가 말하는 걸 색으로 한 번 더 말하는 셈이라 색이라는 칸을 버리게 된다.
+   막대 사이는 선이 아니라 틈으로 가른다. */
+.trend{position:relative;display:flex;align-items:flex-end;gap:7px;margin-top:16px}
+.tb{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;
+  background:none;border:0;padding:0;font:inherit;cursor:pointer;min-width:0}
+.tb-stack{position:relative;width:100%;max-width:38px;height:var(--h)}
+.tb-b,.tb-p{position:absolute;left:0;right:0;border-radius:4px 4px 0 0;display:block}
+.tb-b{bottom:0;background:var(--blue)}
+.tb-p{background:var(--blue);opacity:.24}
+/* 안 쓴 달은 막대를 그리지 않는다. 3px 토막은 "조금 썼다"로 읽힌다. */
+.tb-z{position:absolute;bottom:0;left:0;right:0;height:2px;border-radius:1px;background:var(--line)}
+.tb-v{position:absolute;left:50%;transform:translateX(-50%);white-space:nowrap;
+  font-size:11px;font-weight:700;color:var(--ink2);line-height:1}
+.tb-l{font-size:11px;color:var(--ink3)}
+.tb.now .tb-l{color:var(--blue);font-weight:700}
+/* 예산은 가로줄이지 눈금이 아니다. 점선은 여기서만 쓴다. */
+.tb-limit{position:absolute;left:0;right:0;height:0;border-top:1px dashed #94A3B8;
+  pointer-events:none;z-index:1}
+.tb-limit span{position:absolute;left:0;top:-7px;font-size:10px;color:var(--ink3);
+  background:var(--card);padding:0 5px 0 0}
+
 /* 금액 가리기 — 병원에서 어깨너머로 보이는 게 문제였다.
    지우지 않고 흐리는 이유: 숫자가 있다는 건 보이니 화면이 망가진 걸로 오해하지 않는다. */
 body.masked .num, body.masked .big, body.masked .tx-amt,

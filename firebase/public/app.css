@@ -8,6 +8,11 @@
   --warnbg:#FBF3E3; --warnline:#E8D9B8; --flowbg:#EAF4F7; --flowline:#C2DFE8;
 }
 *{box-sizing:border-box}
+
+/* hidden 속성은 브라우저 기본 스타일이라 내가 쓴 display 규칙에 밀린다.
+   .center 에 display:grid 를 준 탓에 로그인 화면을 숨겨도 계속 보였다.
+   숨기라면 숨겨야 한다. */
+[hidden]{display:none !important}
 html,body{margin:0;background:var(--ground);color:var(--ink);
   font-family:"IBM Plex Sans KR",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 .wrap{max-width:460px;margin:0 auto;padding:18px 16px 96px}

@@ -31,9 +31,11 @@ let db, auth, uid, projectId, D = null;
  * 단축어가 두드릴 주소.
  *
  * 2세대 함수는 Cloud Run 주소를 받으므로 프로젝트 이름만으로 만들어 낼 수 없다.
- * 배포 로그나 Functions 콘솔에 찍힌 실제 주소를 한 번 저장해 두고 쓴다.
+ * 지금 배포된 주소를 기본값으로 두고, 바뀌면 설정에서 고친다.
+ * 주소만으로는 아무것도 못 한다 — 토큰이 있어야 하고, 그마저도 넣기만 된다.
  */
-const ingestUrl = () => D?.ingest?.url || '';
+const INGEST_DEFAULT = 'https://ingest-6ygn4mmscq-du.a.run.app';
+const ingestUrl = () => D?.ingest?.url || INGEST_DEFAULT;
 
 function toast(msg) {
   const el = document.createElement('div');
@@ -500,8 +502,7 @@ function renderSetup() {
         value="${esc(ingestUrl())}"></div>
     <div style="display:flex;gap:7px">
       <button type="submit" class="act ghost" style="flex:1">저장</button>
-      <button type="button" class="act primary" id="pingIngest" style="flex:1"
-        ${ingestUrl() ? '' : 'disabled'}>연결 확인</button>
+      <button type="button" class="act primary" id="pingIngest" style="flex:1">연결 확인</button>
     </div></form>`;
 
   h += `<form class="card" data-form="token">

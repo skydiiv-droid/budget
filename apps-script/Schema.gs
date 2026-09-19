@@ -67,6 +67,8 @@ function setup() {
   });
   seedCategories_();
   seedAccounts_();
+  seedRules_();
+  seedMerchants_();
   SpreadsheetApp.getActiveSpreadsheet().toast('시트 준비 완료');
 }
 

@@ -112,6 +112,47 @@ check('남은 금액보다 크게 들어온 입금은 후보에서 뺀다', () =
   assert.strictEqual(ctx.suggestSettlements_(2800000).length, 0, '급여 입금이 정산 후보로 뜨면 안 된다');
 });
 
+console.log('\n기본 분류 규칙');
+
+function seeded() {
+  const store = createStore({});
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Seed.gs'], store);
+  ctx.seedRules_();
+  ctx.seedMerchants_();
+  return ctx;
+}
+
+check('실물 가맹점 "컴포즈커피발산"을 카페로 분류한다', () => {
+  assert.strictEqual(seeded().classify_('컴포즈커피발산', 1800, null).categoryId, 'cat_cafe');
+});
+
+check('이마트24는 마트가 아니라 편의점이다', () => {
+  const r = seeded().classify_('이마트24 역삼점', 3000, null);
+  assert.strictEqual(r.categoryId, 'cat_convenience', '"이마트"에 먼저 걸리면 안 된다');
+});
+
+check('쿠팡이츠는 쇼핑이 아니라 배달이다', () => {
+  const r = seeded().classify_('쿠팡이츠', 18000, null);
+  assert.strictEqual(r.categoryId, 'cat_delivery', '"쿠팡"에 먼저 걸리면 안 된다');
+});
+
+check('구독은 디지털과 미디어로 갈린다', () => {
+  const ctx = seeded();
+  assert.strictEqual(ctx.classify_('ANTHROPIC CLAUDE', 30000, null).categoryId, 'cat_sub_digital');
+  assert.strictEqual(ctx.classify_('NETFLIX.COM', 17000, null).categoryId, 'cat_sub_media');
+});
+
+check('간편결제 대행사는 이름으로 분류하지 않는다', () => {
+  const r = seeded().classify_('네이버파이낸셜', 12000, null);
+  assert.strictEqual(r.categoryId, null);
+  assert.strictEqual(r.reason, 'passthrough', '무엇을 샀는지 알 수 없으므로 물어봐야 한다');
+});
+
+check('모르는 곳은 미분류로 둔다', () => {
+  const r = seeded().classify_('듣도보도못한가게', 5000, null);
+  assert.strictEqual(r.categoryId, null);
+});
+
 console.log('\n위치 매칭');
 
 check('같은 자리 기록이 쌓이면 자동 분류한다', () => {

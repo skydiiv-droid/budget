@@ -167,12 +167,26 @@ function applyGeneric_(text, result) {
   result.confidence = Math.round(Math.min(score, 0.9) * 100) / 100;
 }
 
+/**
+ * 어느 곳에서 온 문자인지 가린다.
+ *
+ * 둘 다 이름을 온전히 적지 않는다.
+ *   우리은행 : "우리 09/19 14:16"
+ *   현대카드 : "현대 이마트Plus 승인"   <- 카드 상품명이 붙어 "현대카드"가 없다
+ *
+ * 은행을 먼저 본다. 카드 문자에 은행 이름이 섞이는 일은 없지만,
+ * 은행 문자의 가맹점이 "현대백화점"일 수는 있기 때문이다.
+ */
 function detectIssuer_(text, sender) {
   const haystack = String(sender || '') + '\n' + text;
-  if (/현대\s*카드/.test(haystack)) return '현대카드';
-  // 실제 우리은행 문자는 "[Web발신]\n우리 09/19 14:16" 처럼 은행명이 "우리" 한 단어다.
-  // "[우리]" 나 "우리은행" 만 찾으면 놓친다.
+
   if (/우리은행|\[우리\]|(^|\n)\s*우리[\s\d]/.test(haystack)) return '우리은행';
+
+  // 줄 첫머리의 "현대" + 카드 문자에만 나오는 낱말이 함께 있을 때만 카드로 본다
+  const looksLikeCard = /승인|일시불|누적|할부/.test(haystack);
+  if (looksLikeCard && /(^|\n)\s*현대[\s가-힣A-Za-z]/.test(haystack)) return '현대카드';
+  if (/현대\s*카드/.test(haystack)) return '현대카드';
+
   return '';
 }
 
@@ -250,22 +264,38 @@ function extractDateTime_(text) {
  * 숫자/키워드/발급사명을 걷어내고 남은 덩어리 중 마지막 것을 고른다.
  * 정확도가 높지 않으므로 Layer 2가 붙으면 이 경로는 거의 안 쓰인다.
  */
+const MERCHANT_NOISE = [
+  '승인', '취소', '결제', '일시불', '개월', '누적', '잔액', '출금', '입금', '지급',
+  '사용금액', '사용', '체크', '신용', '현대카드', '우리은행', '현대', '우리',
+  '고객님', '원', 'Web발신',
+];
+
+/**
+ * 가맹점 추출 휴리스틱.
+ * 국내 카드·은행 문자는 상대방 이름이 마지막 줄 근처에 온다.
+ * 걷어내야 할 것이 많다.
+ *
+ *   "누적3,634,067원"  금액이 붙은 덩어리. 띄어쓰기가 없어 한 토막으로 잡힌다
+ *   "신*우"            가려진 본인 이름. 가맹점이 아니다
+ *   "09/19" "19:14"    날짜와 시각
+ *
+ * 정확도가 높지 않으므로 Pattern 시트에 정규식이 붙으면 이 경로는 거의 안 쓰인다.
+ */
 function extractMerchant_(text) {
-  const noise = [
-    '승인', '취소', '결제', '일시불', '개월', '누적', '잔액', '출금', '입금', '지급',
-    '사용금액', '사용', '체크', '신용', '현대카드', '우리은행', '고객님', '원',
-  ];
   const chunks = String(text)
     .split(/[\n\r\[\]()]+/)
     .join(' ')
     .split(/\s+/)
-    .map(function (t) { return t.replace(/[,.*]+$/, '').trim(); })
+    .map(function (t) { return t.replace(/[,.]+$/, '').trim(); })
     .filter(function (t) {
       if (t.length < 2) return false;
-      if (/^\d/.test(t)) return false;                     // 금액·날짜 토큰
-      if (/^\d{1,2}[:\/.]\d/.test(t)) return false;
-      if (noise.indexOf(t) >= 0) return false;
+      if (MERCHANT_NOISE.indexOf(t) >= 0) return false;
       if (!/[가-힣A-Za-z]/.test(t)) return false;
+      if (/^\d/.test(t)) return false;              // 1,800원 · 09/19
+      if (/[*]/.test(t)) return false;              // 신*우 · *478794 — 가려진 본인 정보
+      if (/[:\/]/.test(t)) return false;            // 19:14 · 09/19
+      if (/\d[\d,]*원/.test(t)) return false;       // 누적3,634,067원
+      if (/\d{1,3}(?:,\d{3})+/.test(t)) return false;
       return true;
     });
   if (!chunks.length) return null;

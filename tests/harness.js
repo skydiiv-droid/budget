@@ -24,7 +24,12 @@ const Utilities = {
       .replace(/ss/g, pad(date.getSeconds(), 2))
       .replace(/'/g, '');
   },
-  getUuid() { return 'test-uuid-0000-0000-000000000000'; },
+  // 실제 getUuid는 매번 다른 값을 준다. 같은 값을 돌려주면 id가 겹쳐
+  // findBy_ 가 엉뚱한 행을 집는다.
+  getUuid: (() => {
+    let n = 0;
+    return () => 'test-uuid-' + String(++n).padStart(12, '0') + '-0000-000000000000';
+  })(),
   computeDigest(_algo, input) {
     let hash = 0;
     for (let i = 0; i < input.length; i++) {

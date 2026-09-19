@@ -120,6 +120,35 @@ check('[실물] 1원 이체도 금액으로 읽는다', () => {
   assert.strictEqual(r.ok, true);
 });
 
+// 실제 수신한 현대카드 승인 문자. 이름과 누적액만 가렸다.
+const REAL_HYUNDAI_APPROVAL = [
+  '[Web발신]',
+  '현대 이마트Plus 승인',
+  '홍*동',
+  '1,800원 일시불',
+  '09/19 19:14',
+  '컴포즈커피발산',
+  '누적1,234,567원',
+].join('\n');
+
+check('[실물] 카드 상품명이 붙어도 현대카드로 본다', () => {
+  const r = parse(REAL_HYUNDAI_APPROVAL, '');
+  assert.strictEqual(r.issuer, '현대카드', '"현대카드"가 아니라 "현대 이마트Plus"로 온다');
+});
+
+check('[실물] 승인액과 월 누적액을 가른다', () => {
+  const r = parse(REAL_HYUNDAI_APPROVAL, '');
+  assert.strictEqual(r.amount, 1800);
+  assert.strictEqual(r.cumulative, 1234567, '누적은 앵커로 빠져야 한다');
+  assert.strictEqual(r.kind, 'approval');
+});
+
+check('[실물] 가맹점은 금액 덩어리도 본인 이름도 아니다', () => {
+  const r = parse(REAL_HYUNDAI_APPROVAL, '');
+  assert.strictEqual(r.merchantRaw, '컴포즈커피발산',
+    '"누적1,234,567원"이나 "홍*동"을 가맹점으로 잡으면 안 된다');
+});
+
 check('"원"이 붙은 소액도 금액으로 읽는다', () => {
   const r = parse('[현대카드] 09/15 12:34 승인 50원 일시불 테스트', '15771234');
   assert.strictEqual(r.amount, 50, '세 자리 미만이라고 버리면 안 된다');

@@ -241,6 +241,46 @@ check('이미 분류한 건은 새 규칙이 덮어쓰지 않는다', () => {
     '일부러 다르게 넣었을 수 있다');
 });
 
+console.log('\n시드 채우기');
+
+check('이미 쓰던 시트에 빠진 카테고리만 더한다', () => {
+  const store = createStore({
+    Category: [{ id: 'cat_cafe', name: '카페' }],   // 예전 시트에 이미 있던 것
+  });
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Seed.gs'],
+                   { ...store, Logger: { log() {} } });
+  const added = ctx.resync();
+
+  const ids = store.readAll_('Category').map((c) => c.id);
+  assert.strictEqual(ids.filter((id) => id === 'cat_cafe').length, 1, '있는 것을 또 넣으면 안 된다');
+  assert.ok(ids.indexOf('cat_gathering') >= 0, '새로 생긴 모임이 들어가야 한다');
+  assert.ok(added.categories > 0);
+});
+
+check('직접 만든 규칙은 건드리지 않는다', () => {
+  const store = createStore({
+    Rule: [{ id: 'r1', matchType: 'contains', pattern: '스타벅스',
+             categoryId: 'cat_hobby', source: 'learned' }],
+  });
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Seed.gs'],
+                   { ...store, Logger: { log() {} } });
+  ctx.resync();
+
+  const mine = store.readAll_('Rule').filter((r) => r.source === 'learned');
+  assert.strictEqual(mine.length, 1);
+  assert.strictEqual(mine[0].categoryId, 'cat_hobby', '내가 정한 것이 기본값으로 덮이면 안 된다');
+});
+
+check('여러 번 실행해도 늘어나지 않는다', () => {
+  const store = createStore({});
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Seed.gs'],
+                   { ...store, Logger: { log() {} } });
+  ctx.resync();
+  const after1 = store.readAll_('Rule').length;
+  ctx.resync();
+  assert.strictEqual(store.readAll_('Rule').length, after1);
+});
+
 console.log('\n단축어 메뉴');
 
 function menuCtx(transactions) {

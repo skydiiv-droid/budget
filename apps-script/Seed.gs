@@ -193,3 +193,59 @@ function seedMerchants_() {
     });
   });
 }
+
+/**
+ * 빠진 시드만 채운다.
+ *
+ * setup() 의 시드 함수들은 시트가 비어 있을 때만 넣는다 — 사용자가 일부러
+ * 지운 항목을 되살리지 않기 위해서다. 그래서 이미 쓰던 시트에 새 카테고리나
+ * 새 기본 규칙이 추가되면 들어가지 않는다. 그때 이걸 실행한다.
+ *
+ * 있는 것은 건드리지 않고 없는 것만 더한다. 여러 번 실행해도 안전하다.
+ */
+function resync() {
+  const added = { categories: 0, rules: 0, merchants: 0 };
+
+  const haveCategory = {};
+  readAll_('Category').forEach(function (c) { haveCategory[c.id] = true; });
+  SEED_CATEGORIES.forEach(function (row, i) {
+    if (haveCategory[row[0]]) return;
+    append_('Category', {
+      id: row[0], name: row[1], parentId: row[2],
+      kind: row[3], icon: row[4], sortOrder: i,
+    });
+    added.categories++;
+  });
+
+  // 직접 만든 규칙(learned)은 세지 않는다. 기본 규칙만 채운다.
+  const haveRule = {};
+  readAll_('Rule').forEach(function (r) {
+    if (r.source === 'builtin') haveRule[String(r.pattern)] = true;
+  });
+  SEED_RULES.forEach(function (row) {
+    if (haveRule[row[1]]) return;
+    append_('Rule', {
+      id: newId_('rul'), priority: row[0], matchType: 'contains',
+      pattern: row[1], categoryId: row[2], source: 'builtin',
+      hitCount: 0, lastUsedAt: '',
+    });
+    added.rules++;
+  });
+
+  const haveMerchant = {};
+  readAll_('Merchant').forEach(function (m) { haveMerchant[m.normalizedName] = true; });
+  SEED_PASSTHROUGH.forEach(function (name) {
+    const normalized = normalizeMerchant_(name);
+    if (haveMerchant[normalized]) return;
+    append_('Merchant', {
+      id: newId_('mch'), normalizedName: normalized, displayName: name,
+      defaultCategoryId: '', isPassthrough: true, alwaysAsk: false,
+      aliases: '', hitCount: 0,
+    });
+    added.merchants++;
+  });
+
+  Logger.log('카테고리 ' + added.categories + '개 · 기본 규칙 ' + added.rules +
+             '개 · 간편결제 ' + added.merchants + '개를 더했습니다.');
+  return added;
+}

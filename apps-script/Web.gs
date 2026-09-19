@@ -93,6 +93,26 @@ function apiDeleteRecurring(token, id) {
   return apiLoad(token);
 }
 
+/**
+ * 토큰을 바꾼다.
+ *
+ * URL이 길어서 무작위 문자열을 쓸 이유는 없다. 외우기 쉬운 문장이어도
+ * 길면 충분하다. 다만 주소에 붙일 수 있는 값이어야 하므로 URL에서 뜻을
+ * 갖는 글자는 막는다.
+ *
+ * 바꾸고 나면 아이폰 단축어의 token 값도 고쳐야 문자가 계속 들어온다.
+ */
+function apiChangeToken(token, newToken) {
+  requireToken_(token);
+
+  const next = String(newToken || '').trim();
+  if (next.length < 8) throw new Error('8자 이상으로 해 주세요');
+  if (/[\s&?#%+/]/.test(next)) throw new Error('공백과 & ? # % + / 는 쓸 수 없어요');
+
+  PropertiesService.getScriptProperties().setProperty('INGEST_TOKEN', next);
+  return { status: 'ok' };
+}
+
 function dashboardHtml_(token) {
   return DASHBOARD_HTML.replace('__TOKEN__', token);
 }

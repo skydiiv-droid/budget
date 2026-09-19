@@ -2242,8 +2242,15 @@ function unlocked(){
   document.querySelector('.tabs').hidden = false;
 }
 
-function load(){
+/* 처음 한 번. 어디서 토큰을 가져올지는 여기서만 정한다.
+   load() 가 이 일을 같이 하면 방금 입력한 토큰을 덮어쓴다. */
+function boot(){
   TOKEN = BOOT_TOKEN || readStored();
+  if (!TOKEN) { showUnlock(''); return; }
+  load();
+}
+
+function load(){
   if (!TOKEN) { showUnlock(''); return; }
   google.script.run
     .withSuccessHandler(function(d){ storeToken(TOKEN); unlocked(); render(d); })
@@ -2428,6 +2435,17 @@ function renderSetup(){
     + '<button type="submit" class="act primary" style="width:100%">저장</button>'
     + '<div class="muted" style="margin-top:10px">이자율을 넣으면 비싼 빚부터 갚으라고 홈에서 알려줍니다.</div></form>';
 
+  h += '<form class="card" id="tokenForm"><div class="lbl" style="margin-bottom:6px">토큰 바꾸기</div>'
+    + '<div class="muted" style="margin-bottom:12px">외우기 쉬운 문장으로 바꿔도 됩니다. '
+    + '8자 이상, 공백과 <b>&amp; ? # % + /</b> 는 쓸 수 없어요.</div>'
+    + '<div class="field"><label for="nt1">새 토큰</label>'
+    + '<input id="nt1" name="newToken" type="password" autocomplete="new-password" required></div>'
+    + '<div class="field"><label for="nt2">한 번 더</label>'
+    + '<input id="nt2" name="confirm" type="password" autocomplete="new-password" required></div>'
+    + '<button type="submit" class="act primary" style="width:100%">바꾸기</button>'
+    + '<div class="note warn" style="margin:12px 0 0">바꾸면 <b>아이폰 단축어의 token 값도</b> '
+    + '같이 고쳐야 해요. 안 고치면 문자가 안 들어옵니다.</div></form>';
+
   h += '<div class="card"><div class="lbl" style="margin-bottom:6px">이 기기</div>'
     + '<div class="muted" style="margin-bottom:12px">토큰을 이 브라우저가 기억하고 있어요. '
     + '남의 기기에서 열었다면 지우고 나가세요.</div>'
@@ -2479,12 +2497,25 @@ document.addEventListener('submit', function(e){
     if (TOKEN) load();
     return;
   }
+  if (f.id === 'tokenForm'){
+    var a = f.elements.newToken.value.trim();
+    var b = f.elements.confirm.value.trim();
+    if (a !== b) { toast('두 칸이 서로 달라요'); return; }
+    google.script.run
+      .withSuccessHandler(function(){
+        TOKEN = a; storeToken(a); f.reset();
+        toast('바꿨어요 — 단축어의 token 도 고쳐 주세요');
+      })
+      .withFailureHandler(fail)
+      .apiChangeToken(TOKEN, a);
+    return;
+  }
   if (f.id === 'setForm') call('apiSaveSettings', formData(f));
   else if (f.id === 'debtForm') call('apiSaveDebt', formData(f));
   else if (f.id === 'recForm') call('apiSaveRecurring', formData(f));
 });
 
-load();
+boot();
 </script>
 </body>
 </html>`;
@@ -2584,6 +2615,26 @@ function apiDeleteRecurring(token, id) {
   requireToken_(token);
   deleteRow_('RecurringRule', id);
   return apiLoad(token);
+}
+
+/**
+ * 토큰을 바꾼다.
+ *
+ * URL이 길어서 무작위 문자열을 쓸 이유는 없다. 외우기 쉬운 문장이어도
+ * 길면 충분하다. 다만 주소에 붙일 수 있는 값이어야 하므로 URL에서 뜻을
+ * 갖는 글자는 막는다.
+ *
+ * 바꾸고 나면 아이폰 단축어의 token 값도 고쳐야 문자가 계속 들어온다.
+ */
+function apiChangeToken(token, newToken) {
+  requireToken_(token);
+
+  const next = String(newToken || '').trim();
+  if (next.length < 8) throw new Error('8자 이상으로 해 주세요');
+  if (/[\s&?#%+/]/.test(next)) throw new Error('공백과 & ? # % + / 는 쓸 수 없어요');
+
+  PropertiesService.getScriptProperties().setProperty('INGEST_TOKEN', next);
+  return { status: 'ok' };
 }
 
 function dashboardHtml_(token) {

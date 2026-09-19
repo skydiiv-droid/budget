@@ -60,9 +60,25 @@ jobs:
         working-directory: firebase/functions
         run: npm ci --omit=dev || npm install --omit=dev
 
-      - name: 배포
+      # 한 번에 올리면 어디서 막혔는지 안 보인다. 나눠서 올린다.
+      # 권한이 모자라면 그 단계만 빨개지므로 무엇을 줘야 하는지 바로 안다.
+      - name: 화면 올리기 (Hosting)
         working-directory: firebase
-        run: npx --yes firebase-tools@13 deploy --only hosting,firestore,functions --non-interactive
+        run: npx --yes firebase-tools@13 deploy --only hosting --non-interactive
+
+      - name: 보안 규칙 올리기 (Firestore)
+        working-directory: firebase
+        run: npx --yes firebase-tools@13 deploy --only firestore --non-interactive
+
+      - name: 수집 함수 올리기 (Functions)
+        working-directory: firebase
+        run: npx --yes firebase-tools@13 deploy --only functions --non-interactive
 
       - name: 주소
-        run: echo "https://budget-13aec.web.app" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          {
+            echo "### 배포 완료"
+            echo ""
+            echo "- 화면: https://budget-13aec.web.app"
+            echo "- 수집: https://asia-northeast3-budget-13aec.cloudfunctions.net/ingest"
+          } >> "$GITHUB_STEP_SUMMARY"

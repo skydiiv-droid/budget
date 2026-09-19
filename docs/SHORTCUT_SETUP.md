@@ -20,10 +20,10 @@
 ```
 1. 현재 위치 가져오기               ← 선택. 빼면 위치 자동분류만 꺼진다
 2. URL의 내용 가져오기
-     URL      : <웹 앱 배포 URL>
+     URL      : 웹 앱 배포 URL (꺾쇠 없이 주소 그대로)
      방식     : POST
      본문     : JSON
-       token      : <INGEST_TOKEN>
+       token      : 네 토큰 값 (꺾쇠 없이)
        action     : ingest
        body       : [단축어 입력]        ← 문자 본문
        sender     : (비워도 됨)
@@ -79,7 +79,8 @@
 
 ## 5. 대시보드 홈 화면에 추가
 
-Safari에서 `<웹 앱 URL>?token=<INGEST_TOKEN>` 을 열고
+Safari에서 배포 URL 뒤에 `?token=` 과 토큰을 붙여 연다
+(`.../exec?token=bk7Qz...` — 꺾쇠를 넣으면 `%3E` 로 바뀌어 주소가 깨진다).
 공유 > 홈 화면에 추가. 아이콘이 생기고 주소창 없이 앱처럼 열린다.
 
 ## 알아둘 것

@@ -32,7 +32,10 @@
 4. 편집기에서 `setup()` 을 한 번 실행한다. 시트와 초기 카테고리가 만들어진다.
 5. **배포 > 새 배포 > 웹 앱** — 실행 주체 `나`, 액세스 권한 `모든 사용자`.
    나오는 URL을 복사한다.
-6. 아이폰 단축어를 건다 → [docs/SHORTCUT_SETUP.md](docs/SHORTCUT_SETUP.md)
+6. 아이폰 단축어를 건다
+
+처음 설정한다면 [docs/SETUP_WALKTHROUGH.md](docs/SETUP_WALKTHROUGH.md) 를 따라간다.
+아이폰만으로 따라갈 수 있게 쪼개 뒀고, 1단계(수집)까지 15분이면 끝난다.
 
 ## 테스트
 

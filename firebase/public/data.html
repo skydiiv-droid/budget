@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>원본 데이터</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="boot" class="center"><div><h1>원본 데이터</h1><p class="muted" style="margin-top:10px">불러오는 중…</p></div></div>
+<div id="app" hidden>
+  <div class="wrap" style="max-width:920px;padding-bottom:40px">
+    <div class="row" style="margin-bottom:14px">
+      <div class="grow"><h1>원본 데이터</h1>
+        <div class="sub">시트 대신 여기서 본다. 고치고 지울 수 있다.</div></div>
+      <a class="act ghost" href="/" style="text-decoration:none;min-height:38px;padding:9px 12px;font-size:12.5px">돌아가기</a>
+    </div>
+    <div class="field"><label for="pick">무엇을 볼까요</label>
+      <select id="pick"></select></div>
+    <div id="out"></div>
+  </div>
+</div>
+<script type="module" src="/data.js"></script>
+</body>
+</html>

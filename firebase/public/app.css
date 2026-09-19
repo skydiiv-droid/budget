@@ -1,0 +1,76 @@
+/* 색은 검증기를 돌려 고른 것이다. 적·녹 대신 적·청록을 쓴다 —
+   적색약에서 빨강과 초록은 거의 구분되지 않는데, 수입과 지출은 매일 보는
+   숫자라 그러면 안 된다. 색만으로 구분하지 않도록 부호와 글자를 늘 함께 둔다. */
+:root{
+  --ground:#F7F5F0; --card:#FFF; --ink:#1A1917; --ink2:#57544E; --ink3:#6F6B63;
+  --line:#E5E1D8; --line2:#F2EEE6;
+  --debt:#B33A2B; --flow:#0A7B9C; --warn:#B07C1F;
+  --warnbg:#FBF3E3; --warnline:#E8D9B8; --flowbg:#EAF4F7; --flowline:#C2DFE8;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans KR",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:460px;margin:0 auto;padding:18px 16px 96px}
+
+h1{font-size:21px;font-weight:600;margin:0;letter-spacing:-.01em}
+.sub{font-size:12px;color:var(--ink3)}
+.lbl{font-size:12.5px;font-weight:600;color:var(--ink2)}
+.muted{font-size:12px;color:var(--ink3)}
+.num{font-variant-numeric:tabular-nums}
+.big{font-family:"Instrument Serif",Georgia,serif;line-height:1;letter-spacing:-.01em}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:18px;margin-bottom:12px}
+.row{display:flex;align-items:center;gap:10px}
+.grow{flex-grow:1;min-width:0}
+.hr{height:1px;background:var(--line2);margin:13px 0}
+.bar{height:10px;border-radius:5px;background:#EFEAE0;overflow:hidden;display:flex}
+.bar>i{border-radius:5px;display:block}
+.item{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line2)}
+.item:last-child{border-bottom:0}
+.empty{text-align:center;padding:26px 16px;color:var(--ink3);font-size:13px;line-height:1.7}
+
+.note{border-radius:14px;padding:14px 15px;font-size:12.5px;line-height:1.6;margin-bottom:12px;
+  border:1px solid transparent;display:block;width:100%;text-align:left}
+.note.warn{background:var(--warnbg);border-color:var(--warnline);color:#6B5518}
+.note.ok{background:var(--flowbg);border-color:var(--flowline);color:#185E72}
+.note b{font-weight:600}
+button.note{font:inherit;cursor:pointer}
+
+label{display:block;font-size:12.5px;font-weight:600;color:var(--ink2);margin-bottom:6px}
+input,select{width:100%;font:inherit;font-size:16px;min-height:44px;padding:10px 12px;
+  background:#fff;border:1px solid #DDD8CC;border-radius:10px;color:var(--ink)}
+input:focus,select:focus{outline:2px solid var(--flow);outline-offset:-1px;border-color:var(--flow)}
+.field{margin-bottom:12px}
+.fields{display:flex;gap:10px}
+.fields>.field{flex:1}
+
+button.act{font:inherit;font-size:13.5px;font-weight:600;min-height:44px;padding:11px 16px;
+  border-radius:10px;cursor:pointer;border:1px solid transparent}
+button.primary{background:var(--ink);color:#fff}
+button.ghost{background:#fff;color:var(--ink2);border-color:#DDD8CC}
+button.danger{background:#FAEEEC;color:var(--debt);border-color:#EBD3CE;
+  font-size:12px;padding:7px 11px;min-height:36px}
+
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:5;display:flex;
+  background:rgba(255,255,255,.96);border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom);backdrop-filter:blur(8px)}
+.tabs button{flex:1;min-height:54px;font:inherit;font-size:12px;font-weight:500;
+  background:none;color:var(--ink3);border:0;cursor:pointer;position:relative}
+.tabs button[aria-current="page"]{color:var(--ink);font-weight:700}
+.tabs button[aria-current="page"]::before{content:"";position:absolute;top:0;left:50%;
+  transform:translateX(-50%);width:26px;height:2px;border-radius:0 0 2px 2px;background:var(--ink)}
+.badge{position:absolute;top:7px;left:50%;margin-left:12px;min-width:17px;height:17px;
+  padding:0 4px;border-radius:9px;background:var(--debt);color:#fff;
+  font-size:10.5px;font-weight:700;line-height:17px;text-align:center}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:78px;z-index:9;
+  background:var(--ink);color:#fff;font-size:13px;padding:11px 18px;border-radius:11px;
+  box-shadow:0 6px 20px rgba(0,0,0,.18);max-width:92vw}
+.center{min-height:100dvh;display:grid;place-items:center;padding:24px;text-align:center}
+.raw{background:var(--ground);border-radius:9px;padding:10px 12px;font-size:11.5px;
+  color:var(--ink2);line-height:1.6;white-space:pre-line;word-break:break-all}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line2);
+  vertical-align:top;word-break:break-all}
+th{font-weight:600;color:var(--ink2);white-space:nowrap}

@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 
 import { parseMessage, normalizeMerchant } from './shared/parse.js';
 import { classify, suggestKeyword } from './shared/classify.js';
+import { ledger, monthSpending, sameSpanLastMonth, pace } from './shared/ledger.js';
 
 initializeApp();
 const db = getFirestore();
@@ -225,3 +226,88 @@ function anchorsFrom(parsed) {
   }
   return out;
 }
+
+// ───────────────────────────────────────────────── 위젯이 읽는 곳
+
+/**
+ * 잠금화면 위젯이 부르는 창구.
+ *
+ * 위젯은 사람이 아니라 기계다. 새벽에 주머니 속에서 혼자 돌아 로그인을 못
+ * 한다. 그래서 토큰으로 들어온다 — 문자를 넣는 토큰과는 다른 토큰이다.
+ *
+ * 넣는 토큰이 읽기까지 되면 "넣기만 된다"가 거짓말이 된다. 단축어 설정은
+ * 여기저기 돌아다니고, 그 하나가 새면 가계부 전체가 새는 건 다른 얘기다.
+ *
+ * 그리고 여기서는 합계만 내준다. 어디서 얼마 썼는지는 안 나간다 —
+ * 위젯에 띄울 수 있는 건 어차피 숫자 몇 개뿐이다.
+ */
+async function widgetToken() {
+  const snap = await db.doc('config/ingest').get();
+  const token = snap.exists ? String(snap.data().widgetToken || '').trim() : '';
+  if (!token) throw new HttpError(503, 'no-widget-token', '앱 설정에서 위젯 비밀번호를 정해 주세요');
+  return token;
+}
+
+export const summary = onRequest(
+  { region: 'asia-northeast3', cors: false, maxInstances: 3 },
+  async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const given = String(req.query?.token || req.body?.token || '').trim();
+      if (!given) throw new HttpError(401, 'no-token', '토큰이 없습니다');
+      if (given !== (await widgetToken())) {
+        throw new HttpError(401, 'unauthorized', '토큰이 맞지 않습니다');
+      }
+
+      const uid = await ownerUid();
+      const base = db.collection('users').doc(uid);
+      const since = new Date();
+      since.setMonth(since.getMonth() - 1);
+      since.setDate(1);
+
+      const [txnSnap, accSnap, recSnap, setSnap, rawSnap] = await Promise.all([
+        base.collection('txns').where('occurredAt', '>=', since.toISOString()).get(),
+        base.collection('accounts').get(),
+        base.collection('recurring').get(),
+        base.collection('meta').doc('settings').get(),
+        base.collection('raw').where('parsedOk', '==', false).get(),
+      ]);
+
+      const settings = setSnap.exists ? setSnap.data() : {};
+      const transactions = asArray(txnSnap);
+      const accounts = asArray(accSnap);
+
+      const L = ledger({ transactions, accounts, recurring: asArray(recSnap),
+                         settlements: [], raw: [], settings });
+      const spent = monthSpending({ transactions, settlements: [], settings });
+      const total = spent.reduce((s, r) => s + (r.counted ? r.net : 0), 0);
+      const prev = sameSpanLastMonth({ transactions, settlements: [], settings });
+      const run = pace(total, L.month, settings.cycleStartDay);
+      const bill = L.cards.items[0] || null;
+
+      res.json({
+        ok: true,
+        at: new Date().toISOString(),
+        month: L.month,
+        spent: total,
+        budget: L.budget.limit,
+        perDay: L.budget.perDay,
+        daysLeft: L.budget.daysLeft,
+        usedPct: L.budget.usedPct,
+        projected: run.projected,
+        lastMonthSameSpan: prev.total,
+        debt: L.debt.total,
+        goalPct: L.goal.pct,
+        goalName: L.goal.name,
+        nextBill: bill ? { name: bill.name, total: bill.total,
+                           payAt: bill.payAt.toISOString().slice(0, 10),
+                           daysLeft: bill.daysLeft } : null,
+        billTotal: L.cards.total,
+        waiting: L.inbox.pending + asArray(rawSnap).filter((r) => !r.txnId).length,
+      });
+    } catch (err) {
+      const status = err.status || 500;
+      res.status(status).json({ ok: false, reason: err.reason || 'error', message: err.message });
+    }
+  },
+);

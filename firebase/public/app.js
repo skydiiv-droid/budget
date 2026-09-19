@@ -22,6 +22,8 @@ import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/can
 import { trend, categoryBudgets } from './shared/ledger.js';
 import { search, knownTags, parseTags } from './shared/search.js';
 import { toCSV } from './shared/csv.js';
+import { detectRecurring } from './shared/detect.js';
+import { parseShiftText, shiftText, shiftStats, SHIFT_LABEL } from './shared/shifts.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
 import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
@@ -287,7 +289,8 @@ async function migrateDebts() {
 }
 
 async function refresh() {
-  const [categories, rules, merchants, accounts, recurring, settlements, txns, raw, settingsSnap] =
+  const [categories, rules, merchants, accounts, recurring, settlements,
+         txns, raw, settingsSnap, shiftSnap] =
     await Promise.all([
       readAll('categories'), readAll('rules'), readAll('merchants'), readAll('accounts'),
       readAll('recurring'), readAll('settlements'),
@@ -296,13 +299,15 @@ async function refresh() {
       getDocs(query(col('raw'), orderBy('receivedAt', 'desc'), limit(100)))
         .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }))),
       getDoc(doc(db, 'users', uid, 'meta', 'settings')),
+      getDoc(doc(db, 'users', uid, 'meta', 'shifts')),
     ]);
 
   const settings = settingsSnap.exists() ? settingsSnap.data() : { ...SETTINGS };
   const ingestSnap = await getDoc(doc(db, 'config/ingest')).catch(() => null);
   const ingest = ingestSnap?.exists() ? ingestSnap.data() : {};
+  const shifts = shiftSnap.exists() ? (shiftSnap.data().days || {}) : {};
   D = { categories, rules, merchants, accounts, recurring, settlements,
-        txns, raw, settings, ingest };
+        txns, raw, settings, ingest, shifts };
   D.ledger = ledger({ transactions: txns, recurring, settlements, accounts,
                       categories, raw, settings });
 
@@ -698,6 +703,7 @@ function renderHistory() {
   }
 
   h += renderTrend(trend(histData(), 6));
+  h += renderShifts(month);
 
   const limits = categoryBudgets(
     Object.fromEntries(b.items.flatMap((i) => [[i.id, i.amount], ...i.subs.map((s) => [s.id, 0])])),
@@ -758,6 +764,52 @@ function renderHistory() {
   }
 
   $('history').innerHTML = h;
+}
+
+/**
+ * 근무별 지출.
+ *
+ * 3교대는 하루의 모양이 매일 다르다. 나이트 끝나고 새벽에 쓰는 돈과 오프 날
+ * 쓰는 돈은 성격이 완전히 다른데, 달력으로만 보면 둘 다 그냥 "9월 19일"이다.
+ * 이건 시중 가계부가 못 하는 일이다 — 근무표를 모르니까.
+ */
+function renderShifts(month) {
+  const has = Object.keys(D.shifts).some((k) => k.startsWith(month));
+  if (!has) {
+    // 안 넣었으면 조르지 않는다. 한 번만 알려 주고 만다.
+    return Object.keys(D.shifts).length ? '' : `<button type="button" class="note ok"
+      data-tab="setup">근무표를 넣으면 <b>근무별로 얼마 쓰는지</b> 볼 수 있어요 —
+      나이트 다음 날 유독 많이 쓰는지 같은 것. 설정 → 근무표.</button>`;
+  }
+
+  const rows = monthSpending(histData(), month);
+  const only = Object.fromEntries(Object.entries(D.shifts).filter(([k]) => k.startsWith(month)));
+  const s = shiftStats({ transactions: rows, shifts: only, settlements: D.settlements });
+  if (!s.items.length) return '';
+
+  const top = Math.max(...s.items.map((i) => i.perDay), s.afterNight?.perDay || 0) || 1;
+  const line = (i, faint) => `<div class="brk" style="cursor:default">
+    <span class="grow">
+      <span class="brk-name">${esc(i.label)}
+        <span class="muted" style="font-weight:400">${i.days}일</span></span>
+      <span class="bar"><i style="width:${Math.max(3, Math.round((i.perDay / top) * 100))}%;
+        background:var(--blue)${faint ? ';opacity:.45' : ''}"></i></span>
+    </span>
+    <span class="brk-amt num">${won(i.perDay)}<br><span class="muted">하루</span></span></div>`;
+
+  return `<div class="card">
+    <div class="row"><span class="lbl grow">근무별로 하루에</span>
+      <span class="muted">${s.days}일치</span></div>
+    <div class="muted" style="margin:4px 0 4px">총액이 아니라 하루 평균이에요.
+      오프가 많으면 총액은 당연히 커지니까요.</div>
+    ${s.items.map((i) => line(i)).join('')}
+    ${s.afterNight ? line(s.afterNight, true) : ''}
+    ${s.gap > 5000 ? `<div class="note ok" style="margin:12px 0 0">
+      <b>${esc(s.items[0].label)}</b>에는 <b>${esc(s.items.at(-1).label)}</b>보다
+      하루 <b class="num">${won(s.gap)}</b>씩 더 써요.
+      ${esc(s.items[0].label)}가 이 달에 ${s.items[0].days}일이니
+      <b class="num">${won(s.gap * s.items[0].days)}</b> 차이예요.</div>` : ''}
+  </div>`;
 }
 
 function txRow(r) {
@@ -879,7 +931,30 @@ function renderInbox() {
   const pending = D.txns.filter((t) => t.status === 'pendingCategory' && t.type === 'expense');
   const unparsed = D.raw.filter((r) => !r.parsedOk && !r.txnId);
   const cancels = openCancels(D.txns);
+  const found = detectRecurring({ transactions: D.txns, recurring: D.recurring, settings: D.settings });
   let h = '';
+
+  if (found.length) {
+    h += `<div class="lbl" style="margin:2px 0 4px">이거 고정비 아니에요 · ${found.length}건</div>
+      <div class="muted" style="margin-bottom:9px">매달 같은 곳에 같은 금액이 나가고 있어요.
+      등록해 두면 빚 갚을 여력이 정확해져요.</div>`;
+    for (const f of found.slice(0, 6)) {
+      h += `<div class="card">
+        <div class="row" style="align-items:flex-start">
+          <span class="grow"><span style="font-size:15px;font-weight:600">${esc(f.name)}</span><br>
+            <span class="muted">${f.months.length}달 연속 · 매월 ${f.dayOfMonth}일쯤${
+              f.spread ? ` (${f.spread}일까지 밀림)` : ''}</span></span>
+          <span class="big num" style="font-size:20px">${won(f.expectedAmount)}</span></div>
+        <div class="muted" style="margin-top:9px">${
+          f.months.map((m, i) => `${Number(m.split('-')[1])}월 <span class="num">${won(f.amounts[i])}</span>`).join(' · ')}${
+          f.varies ? ' — 금액이 달마다 달라요 (평균으로 잡아요)' : ''}</div>
+        <div style="display:flex;gap:7px;margin-top:13px">
+          <button type="button" class="act primary" style="flex:1"
+            data-addfixed="${esc(f.key)}">고정비로 등록</button>
+          <button type="button" class="act ghost" data-nofixed="${esc(f.key)}">아니에요</button>
+        </div></div>`;
+    }
+  }
 
   if (cancels.length) {
     h += `<div class="lbl" style="margin:2px 0 9px">어느 결제를 취소한 건가요 · ${cancels.length}건</div>`;
@@ -913,13 +988,13 @@ function renderInbox() {
     }
   }
 
-  if (!pending.length && !unparsed.length && !cancels.length) {
+  if (!pending.length && !unparsed.length && !cancels.length && !found.length) {
     $('inbox').innerHTML = `<div class="card"><div class="empty">정리할 게 없어요.<br>분류하지 못한 결제가 생기면 여기에 쌓입니다.</div></div>`;
     return;
   }
 
   if (pending.length) {
-    h += `<div class="lbl" style="margin:${cancels.length ? 18 : 2}px 0 9px">어디에 쓴 돈인가요 · ${pending.length}건</div>`;
+    h += `<div class="lbl" style="margin:${cancels.length || found.length ? 18 : 2}px 0 9px">어디에 쓴 돈인가요 · ${pending.length}건</div>`;
     for (const t of pending) {
       const decision = classify(t.merchantRaw, {
         merchants: D.merchants, rules: D.rules, transactions: D.txns,
@@ -1215,7 +1290,18 @@ function renderSetup() {
       <div class="field"><label>연결 비밀번호</label>
         <input name="token" type="password" autocomplete="new-password" placeholder="8자 이상" required></div>
       <button type="submit" class="act primary" style="width:100%">비밀번호 저장</button>
-      <div class="note warn" style="margin:12px 0 0">바꾸면 아이폰 <b>단축어의 token 칸도</b> 같이 고쳐야 문자가 계속 들어와요.</div></form>`;
+      <div class="note warn" style="margin:12px 0 0">바꾸면 아이폰 <b>단축어의 token 칸도</b> 같이 고쳐야 문자가 계속 들어와요.</div></form>
+    <div class="hr"></div>
+    <form data-form="widgetToken">
+      <div class="muted" style="margin-bottom:12px">잠금화면 위젯이 쓰는 비밀번호예요.
+        문자 넣는 것과 <b>다른 비밀번호</b>를 쓰는 이유는, 넣는 쪽이 읽기까지 되면
+        단축어 설정 하나가 새는 것과 가계부 전체가 새는 것이 같은 일이 되기 때문이에요.
+        이걸로는 <b>합계 몇 개만</b> 읽히고 어디서 얼마 썼는지는 안 나갑니다.</div>
+      <div class="field"><label>위젯 비밀번호</label>
+        <input name="widgetToken" type="password" autocomplete="new-password" placeholder="8자 이상" required></div>
+      <button type="submit" class="act primary" style="width:100%">위젯 비밀번호 저장</button>
+      ${D.ingest?.widgetToken ? '<div class="note ok" style="margin:12px 0 0">정해져 있어요. Scriptable 위젯에 같은 값을 넣으세요.</div>' : ''}
+    </form>`;
 
   const etc = `<div class="muted" style="margin-bottom:10px">내보내면 엑셀이나 다른 가계부에서 열 수 있어요.
       데이터가 이 앱 안에만 있으면 앱이 인질을 잡고 있는 거니까요.</div>
@@ -1239,6 +1325,9 @@ function renderSetup() {
     fold('cards', '카드',
       cardRows.length ? `${cardRows.length}장` : '없음', cards),
     fold('add', '계좌 · 카드 · 빚 넣기', '한 군데서 다 넣어요', form),
+    fold('shifts', '근무표',
+      Object.keys(D.shifts).length ? `${Object.keys(D.shifts).length}일 넣음` : '안 넣음',
+      renderShiftForm()),
     fold('catbudget', '갈래별 예산',
       D.ledger.byCategory.withLimit.length
         ? `${D.ledger.byCategory.withLimit.length}개 · ${won(D.ledger.byCategory.limitTotal)}`
@@ -1398,6 +1487,35 @@ function fold(key, title, summary, body) {
 }
 
 const KIND_LABEL = { expense: '지출', income: '수입', transfer: '옮김' };
+
+/**
+ * 근무표 넣기.
+ *
+ * 31일을 하나씩 누르라고 하면 아무도 안 넣는다. 근무표는 어차피 한 달치가
+ * 한 장으로 나오니, 글자로 죽 치는 게 제일 빠르다.
+ */
+function renderShiftForm() {
+  const month = histMonth || D.ledger.month;
+  const [y, m] = month.split('-');
+  const now = shiftText(D.shifts, month);
+
+  return `<form data-form="shifts">
+    <input type="hidden" name="month" value="${month}">
+    <div class="muted" style="margin-bottom:12px">
+      <b>${Number(y)}년 ${Number(m)}월</b> 근무를 1일부터 차례로 적어 주세요.
+      <b>D</b> 데이 · <b>E</b> 이브닝 · <b>N</b> 나이트 · <b>O</b> 오프.
+      띄어 써도 되고 한글(데·이·나·오)로 적어도 돼요.
+      <br>내역 화면에서 달을 옮기면 그 달 근무표를 넣을 수 있어요.</div>
+    <div class="field"><label>근무</label>
+      <input name="text" value="${esc(now.replace(/·/g, ''))}"
+        placeholder="DDEENNOODDEENNOO…" autocapitalize="characters" autocomplete="off"
+        style="font-family:ui-monospace,monospace;letter-spacing:2px"></div>
+    <div class="muted" style="margin:-4px 0 12px">지금 넣은 것: <span
+      style="font-family:ui-monospace,monospace;letter-spacing:1px">${esc(now)}</span></div>
+    <button type="submit" class="act primary" style="width:100%">저장</button>
+    <div class="note ok" style="margin:12px 0 0">새벽 8시 전에 쓴 돈은 <b>앞날 근무</b>로 셉니다.
+      나이트 도중에 산 커피는 그 나이트에 쓴 돈이니까요.</div></form>`;
+}
 
 /**
  * 갈래별 예산.
@@ -1827,6 +1945,33 @@ document.addEventListener('click', guard(async (e) => {
     return toast('치웠어요');
   }
 
+  const addFixed = e.target.closest('[data-addfixed]');
+  if (addFixed) {
+    const f = detectRecurring({ transactions: D.txns, recurring: D.recurring, settings: D.settings })
+      .find((x) => x.key === addFixed.dataset.addfixed);
+    if (!f) return;
+    const ref = doc(col('recurring'));
+    await setDoc(ref, {
+      id: ref.id, name: f.name,
+      expectedAmount: f.expectedAmount,
+      dayOfMonth: f.dayOfMonth,
+      categoryId: f.categoryId || null,
+      varies: f.varies,
+      source: 'detected',
+    });
+    await refresh();
+    return toast(`${f.name} 을(를) 고정비로 넣었어요`);
+  }
+
+  const noFixed = e.target.closest('[data-nofixed]');
+  if (noFixed) {
+    await setDoc(doc(db, 'users', uid, 'meta', 'settings'), {
+      ignoredRecurring: [...(D.settings.ignoredRecurring || []), noFixed.dataset.nofixed],
+    }, { merge: true });
+    await refresh();
+    return toast('다시 안 물어볼게요');
+  }
+
   const offset = e.target.closest('[data-offset]');
   if (offset) {
     const [cancelId, originalId] = offset.dataset.offset.split(':');
@@ -2043,6 +2188,20 @@ document.addEventListener('submit', guard(async (e) => {
     return toast('고쳤어요');
   }
 
+  if (form.dataset.form === 'shifts') {
+    const month = values.month || D.ledger.month;
+    const parsed = parseShiftText(values.text, month);
+    // 이 달 것만 갈아 끼운다. 다른 달 근무표까지 날리면 안 된다.
+    const kept = Object.fromEntries(
+      Object.entries(D.shifts).filter(([k]) => !k.startsWith(month)));
+    await setDoc(doc(db, 'users', uid, 'meta', 'shifts'),
+      { days: { ...kept, ...parsed } });
+    await refresh();
+    return toast(Object.keys(parsed).length
+      ? `${Number(month.split('-')[1])}월 ${Object.keys(parsed).length}일치를 넣었어요`
+      : '비웠어요');
+  }
+
   if (form.dataset.form === 'catbudget') {
     const limits = {};
     for (const [id, v] of Object.entries(values)) {
@@ -2076,6 +2235,16 @@ document.addEventListener('submit', guard(async (e) => {
     await setDoc(doc(db, 'config/ingest'), { url }, { merge: true });
     await refresh();
     return toast('저장했어요');
+  }
+
+  if (form.dataset.form === 'widgetToken') {
+    const token = values.widgetToken.trim();
+    if (token.length < 8) return toast('8자 이상으로 해 주세요');
+    if (/[\s&?#%+/]/.test(token)) return toast('공백과 & ? # % + / 는 쓸 수 없어요');
+    await setDoc(doc(db, 'config/ingest'), { widgetToken: token }, { merge: true });
+    form.reset();
+    await refresh();
+    return toast('저장했어요 — 위젯 스크립트의 TOKEN 도 고쳐 주세요');
   }
 
   if (form.dataset.form === 'token') {

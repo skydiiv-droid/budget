@@ -37,6 +37,8 @@ jobs:
       # 폴더를 못 읽으므로 배포 직전에 양쪽으로 복사한다.
       - name: 공용 로직 복사
         run: |
+          rm -rf firebase/functions/shared firebase/public/shared
+          mkdir -p firebase/functions firebase/public
           cp -r firebase/shared firebase/functions/shared
           cp -r firebase/shared firebase/public/shared
 

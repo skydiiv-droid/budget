@@ -149,12 +149,22 @@ function benchmark() {
     mark(name, function () { return readAll_(name).length + '행'; });
   });
 
+  Logger.log('── 한꺼번에 가져오기 ──');
+  invalidate_();
+  mark('preload_()', function () {
+    const ok = preload_(PAYLOAD_SHEETS);
+    return ok ? (typeof Sheets === 'undefined' ? '건너뜀' : '9시트 한 번에')
+              : 'Sheets 서비스 꺼짐 — 편집기 왼쪽 서비스 + 에서 켜면 훨씬 빨라집니다';
+  });
+
   Logger.log('── 화면이 부르는 것들 ──');
   mark('ledger()', function () { const l = ledger(); return l.debt.items.length + '개 빚'; });
   mark('pendingItems_()', function () { return pendingItems_().length + '건'; });
   mark('unparsedItems_()', function () { return unparsedItems_().length + '건'; });
 
-  Logger.log('── 전부 (화면이 한 번 여는 것과 같음) ──');
+  Logger.log('── 전부 (찬 상태에서 처음 여는 것과 같음) ──');
+  invalidate_();
+  try { CacheService.getScriptCache().remove('payload'); } catch (e) {}
   const total = mark('apiLoad()', function () {
     const d = apiLoad(getIngestToken_());
     return JSON.stringify(d).length + '바이트';

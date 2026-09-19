@@ -158,6 +158,52 @@ function invalidate_(name) {
 }
 
 /**
+ * 여러 시트를 한 번에 읽어 캐시에 담는다.
+ *
+ * 시트 한 번 읽기는 행 수와 상관없이 200~800ms 든다. 0행짜리도 마찬가지다.
+ * 그래서 비용은 데이터 양이 아니라 호출 횟수에 붙는다. 화면 한 번 여는 데
+ * 아홉 시트를 읽으면 그것만 2초가 넘는다.
+ *
+ * Sheets 고급 서비스를 켜 두면 batchGet 한 번으로 전부 가져온다.
+ * 켜지 않았으면 조용히 넘어가고 평소처럼 하나씩 읽는다.
+ *
+ * 켜는 법: 편집기 왼쪽 "서비스" + → Google Sheets API → 추가
+ */
+function preload_(names) {
+  if (typeof Sheets === 'undefined') return false;
+
+  const wanted = names.filter(function (n) { return SCHEMA[n] && !SHEET_CACHE_[n]; });
+  if (!wanted.length) return true;
+
+  let response;
+  try {
+    response = Sheets.Spreadsheets.Values.batchGet(spreadsheet_().getId(), { ranges: wanted });
+  } catch (e) {
+    return false;   // 고급 서비스가 없거나 권한이 없으면 평소대로
+  }
+
+  (response.valueRanges || []).forEach(function (vr) {
+    // 돌아온 range 는 "Transaction!A1:U4" 또는 "'이름'!A1:B2" 꼴이다
+    const name = String(vr.range || '').split('!')[0].replace(/^'|'$/g, '');
+    if (!SCHEMA[name]) return;
+
+    const values = vr.values || [];
+    if (values.length < 2) { SHEET_CACHE_[name] = []; return; }
+
+    const headers = values[0];
+    SHEET_CACHE_[name] = values.slice(1).map(function (row) {
+      const obj = {};
+      headers.forEach(function (h, i) { obj[h] = row[i] === undefined ? '' : row[i]; });
+      return obj;
+    });
+  });
+
+  // batchGet 은 아예 빈 시트를 빠뜨리기도 한다. 그것도 읽은 것으로 친다.
+  wanted.forEach(function (n) { if (!SHEET_CACHE_[n]) SHEET_CACHE_[n] = []; });
+  return true;
+}
+
+/**
  * 시트를 객체 배열로 읽는다.
  *
  * 돌려주는 배열은 캐시와 같은 것이다. 부르는 쪽에서 고치면 안 된다 —

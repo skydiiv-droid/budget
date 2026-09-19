@@ -40,7 +40,12 @@ function bustPayload_() {
   try { CacheService.getScriptCache().remove('payload'); } catch (e) {}
 }
 
+/** 화면 한 번에 필요한 시트. 한꺼번에 가져온다. */
+const PAYLOAD_SHEETS = ['Transaction', 'Account', 'Category', 'Rule',
+                        'RecurringRule', 'Settlement', 'Settings', 'Debt', 'RawMessage'];
+
 function buildPayload_() {
+  preload_(PAYLOAD_SHEETS);
   return {
     ledger: ledger(),
     debts: readAll_('Debt'),

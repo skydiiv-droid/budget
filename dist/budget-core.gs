@@ -276,6 +276,52 @@ function invalidate_(name) {
 }
 
 /**
+ * 여러 시트를 한 번에 읽어 캐시에 담는다.
+ *
+ * 시트 한 번 읽기는 행 수와 상관없이 200~800ms 든다. 0행짜리도 마찬가지다.
+ * 그래서 비용은 데이터 양이 아니라 호출 횟수에 붙는다. 화면 한 번 여는 데
+ * 아홉 시트를 읽으면 그것만 2초가 넘는다.
+ *
+ * Sheets 고급 서비스를 켜 두면 batchGet 한 번으로 전부 가져온다.
+ * 켜지 않았으면 조용히 넘어가고 평소처럼 하나씩 읽는다.
+ *
+ * 켜는 법: 편집기 왼쪽 "서비스" + → Google Sheets API → 추가
+ */
+function preload_(names) {
+  if (typeof Sheets === 'undefined') return false;
+
+  const wanted = names.filter(function (n) { return SCHEMA[n] && !SHEET_CACHE_[n]; });
+  if (!wanted.length) return true;
+
+  let response;
+  try {
+    response = Sheets.Spreadsheets.Values.batchGet(spreadsheet_().getId(), { ranges: wanted });
+  } catch (e) {
+    return false;   // 고급 서비스가 없거나 권한이 없으면 평소대로
+  }
+
+  (response.valueRanges || []).forEach(function (vr) {
+    // 돌아온 range 는 "Transaction!A1:U4" 또는 "'이름'!A1:B2" 꼴이다
+    const name = String(vr.range || '').split('!')[0].replace(/^'|'$/g, '');
+    if (!SCHEMA[name]) return;
+
+    const values = vr.values || [];
+    if (values.length < 2) { SHEET_CACHE_[name] = []; return; }
+
+    const headers = values[0];
+    SHEET_CACHE_[name] = values.slice(1).map(function (row) {
+      const obj = {};
+      headers.forEach(function (h, i) { obj[h] = row[i] === undefined ? '' : row[i]; });
+      return obj;
+    });
+  });
+
+  // batchGet 은 아예 빈 시트를 빠뜨리기도 한다. 그것도 읽은 것으로 친다.
+  wanted.forEach(function (n) { if (!SHEET_CACHE_[n]) SHEET_CACHE_[n] = []; });
+  return true;
+}
+
+/**
  * 시트를 객체 배열로 읽는다.
  *
  * 돌려주는 배열은 캐시와 같은 것이다. 부르는 쪽에서 고치면 안 된다 —
@@ -1961,6 +2007,22 @@ var STORE_KEY = 'budget.token';
 var TOKEN = '';
 var D = null;
 
+/* 마지막으로 본 값을 기억해 둔다. 서버는 아무리 빨라도 한두 번 왕복이 필요해서,
+   그동안 빈 화면을 보여 주는 대신 지난번 화면을 먼저 그린다.
+   새 값이 오면 조용히 바꾼다. */
+var SNAP_KEY = 'budget.snapshot';
+
+function saveSnapshot(d){
+  try { localStorage.setItem(SNAP_KEY, JSON.stringify(d)); } catch(e){}
+}
+function readSnapshot(){
+  try { var raw = localStorage.getItem(SNAP_KEY); return raw ? JSON.parse(raw) : null; }
+  catch(e){ return null; }
+}
+function dropSnapshot(){
+  try { localStorage.removeItem(SNAP_KEY); } catch(e){}
+}
+
 function readStored(){
   try { return localStorage.getItem(STORE_KEY) || ''; } catch(e){ return ''; }
 }
@@ -1969,6 +2031,7 @@ function storeToken(t){
 }
 function forgetToken(){
   try { localStorage.removeItem(STORE_KEY); } catch(e){}
+  dropSnapshot();
 }
 
 var ASSET_LABEL = { checking: '입출금', savings: '저축 · 투자', cash: '현금' };
@@ -2012,13 +2075,27 @@ function unlocked(){
 function boot(){
   TOKEN = BOOT_TOKEN || readStored();
   if (!TOKEN) { showUnlock(''); return; }
+
+  var snap = readSnapshot();
+  if (snap){ unlocked(); render(snap); setStale(true); }
   load();
+}
+
+/* 지금 보고 있는 게 지난번 값이라는 표시. 숨기지 않는다 — 낡은 숫자를
+   새 숫자인 양 보여 주는 건 숫자를 안 보여 주는 것보다 나쁘다. */
+function setStale(on){
+  var m = el('monthLabel');
+  if (!m) return;
+  if (on) m.textContent = m.textContent.replace(/ · 갱신 중…$/, '') + ' · 갱신 중…';
+  else m.textContent = m.textContent.replace(/ · 갱신 중…$/, '');
 }
 
 function load(){
   if (!TOKEN) { showUnlock(''); return; }
   google.script.run
-    .withSuccessHandler(function(d){ storeToken(TOKEN); unlocked(); render(d); })
+    .withSuccessHandler(function(d){
+      storeToken(TOKEN); saveSnapshot(d); unlocked(); render(d); setStale(false);
+    })
     .withFailureHandler(function(err){
       var m = String(err && err.message || err);
       if (m.indexOf('unauthorized') >= 0){
@@ -2030,8 +2107,11 @@ function load(){
 }
 
 function call(fn, arg){
-  google.script.run.withSuccessHandler(function(d){ render(d); toast('저장했어요'); })
-    .withFailureHandler(fail)[fn](TOKEN, arg);
+  setStale(true);
+  google.script.run
+    .withSuccessHandler(function(d){ saveSnapshot(d); render(d); setStale(false); toast('저장했어요'); })
+    .withFailureHandler(function(err){ setStale(false); fail(err); })
+    [fn](TOKEN, arg);
 }
 
 /* ───────── 홈 ───────── */
@@ -2497,7 +2577,12 @@ function bustPayload_() {
   try { CacheService.getScriptCache().remove('payload'); } catch (e) {}
 }
 
+/** 화면 한 번에 필요한 시트. 한꺼번에 가져온다. */
+const PAYLOAD_SHEETS = ['Transaction', 'Account', 'Category', 'Rule',
+                        'RecurringRule', 'Settlement', 'Settings', 'Debt', 'RawMessage'];
+
 function buildPayload_() {
+  preload_(PAYLOAD_SHEETS);
   return {
     ledger: ledger(),
     debts: readAll_('Debt'),
@@ -3035,12 +3120,22 @@ function benchmark() {
     mark(name, function () { return readAll_(name).length + '행'; });
   });
 
+  Logger.log('── 한꺼번에 가져오기 ──');
+  invalidate_();
+  mark('preload_()', function () {
+    const ok = preload_(PAYLOAD_SHEETS);
+    return ok ? (typeof Sheets === 'undefined' ? '건너뜀' : '9시트 한 번에')
+              : 'Sheets 서비스 꺼짐 — 편집기 왼쪽 서비스 + 에서 켜면 훨씬 빨라집니다';
+  });
+
   Logger.log('── 화면이 부르는 것들 ──');
   mark('ledger()', function () { const l = ledger(); return l.debt.items.length + '개 빚'; });
   mark('pendingItems_()', function () { return pendingItems_().length + '건'; });
   mark('unparsedItems_()', function () { return unparsedItems_().length + '건'; });
 
-  Logger.log('── 전부 (화면이 한 번 여는 것과 같음) ──');
+  Logger.log('── 전부 (찬 상태에서 처음 여는 것과 같음) ──');
+  invalidate_();
+  try { CacheService.getScriptCache().remove('payload'); } catch (e) {}
   const total = mark('apiLoad()', function () {
     const d = apiLoad(getIngestToken_());
     return JSON.stringify(d).length + '바이트';

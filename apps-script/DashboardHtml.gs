@@ -103,6 +103,22 @@ var STORE_KEY = 'budget.token';
 var TOKEN = '';
 var D = null;
 
+/* 마지막으로 본 값을 기억해 둔다. 서버는 아무리 빨라도 한두 번 왕복이 필요해서,
+   그동안 빈 화면을 보여 주는 대신 지난번 화면을 먼저 그린다.
+   새 값이 오면 조용히 바꾼다. */
+var SNAP_KEY = 'budget.snapshot';
+
+function saveSnapshot(d){
+  try { localStorage.setItem(SNAP_KEY, JSON.stringify(d)); } catch(e){}
+}
+function readSnapshot(){
+  try { var raw = localStorage.getItem(SNAP_KEY); return raw ? JSON.parse(raw) : null; }
+  catch(e){ return null; }
+}
+function dropSnapshot(){
+  try { localStorage.removeItem(SNAP_KEY); } catch(e){}
+}
+
 function readStored(){
   try { return localStorage.getItem(STORE_KEY) || ''; } catch(e){ return ''; }
 }
@@ -111,6 +127,7 @@ function storeToken(t){
 }
 function forgetToken(){
   try { localStorage.removeItem(STORE_KEY); } catch(e){}
+  dropSnapshot();
 }
 
 var ASSET_LABEL = { checking: '입출금', savings: '저축 · 투자', cash: '현금' };
@@ -154,13 +171,27 @@ function unlocked(){
 function boot(){
   TOKEN = BOOT_TOKEN || readStored();
   if (!TOKEN) { showUnlock(''); return; }
+
+  var snap = readSnapshot();
+  if (snap){ unlocked(); render(snap); setStale(true); }
   load();
+}
+
+/* 지금 보고 있는 게 지난번 값이라는 표시. 숨기지 않는다 — 낡은 숫자를
+   새 숫자인 양 보여 주는 건 숫자를 안 보여 주는 것보다 나쁘다. */
+function setStale(on){
+  var m = el('monthLabel');
+  if (!m) return;
+  if (on) m.textContent = m.textContent.replace(/ · 갱신 중…$/, '') + ' · 갱신 중…';
+  else m.textContent = m.textContent.replace(/ · 갱신 중…$/, '');
 }
 
 function load(){
   if (!TOKEN) { showUnlock(''); return; }
   google.script.run
-    .withSuccessHandler(function(d){ storeToken(TOKEN); unlocked(); render(d); })
+    .withSuccessHandler(function(d){
+      storeToken(TOKEN); saveSnapshot(d); unlocked(); render(d); setStale(false);
+    })
     .withFailureHandler(function(err){
       var m = String(err && err.message || err);
       if (m.indexOf('unauthorized') >= 0){
@@ -172,8 +203,11 @@ function load(){
 }
 
 function call(fn, arg){
-  google.script.run.withSuccessHandler(function(d){ render(d); toast('저장했어요'); })
-    .withFailureHandler(fail)[fn](TOKEN, arg);
+  setStale(true);
+  google.script.run
+    .withSuccessHandler(function(d){ saveSnapshot(d); render(d); setStale(false); toast('저장했어요'); })
+    .withFailureHandler(function(err){ setStale(false); fail(err); })
+    [fn](TOKEN, arg);
 }
 
 /* ───────── 홈 ───────── */

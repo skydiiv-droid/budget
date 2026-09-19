@@ -29,12 +29,16 @@ const CONFIG = {
  * 들어가기 쉬운데, 그러면 화면에서 친 값(앞뒤를 떼고 보낸다)과 영영 어긋난다.
  * 비교하는 쪽마다 따로 떼지 않도록 여기 한 곳에서 다듬는다.
  */
+var TOKEN_ = null;
+
 function getIngestToken_() {
+  if (TOKEN_) return TOKEN_;
   const token = PropertiesService.getScriptProperties().getProperty('INGEST_TOKEN');
   if (!token || !String(token).trim()) {
     throw new Error('스크립트 속성 INGEST_TOKEN이 없습니다.');
   }
-  return String(token).trim();
+  TOKEN_ = String(token).trim();
+  return TOKEN_;
 }
 
 /** 받은 토큰이 맞는지 본다. 양쪽 다 앞뒤 공백을 떼고 견준다. */

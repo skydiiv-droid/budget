@@ -56,7 +56,9 @@ function ingest(payload) {
     return { status: 'parse_failed', rawId: rawId, note: parsed.note };
   }
 
-  return materialize_(parsed, rawId, location);
+  const result = materialize_(parsed, rawId, location);
+  bustPayload_();   // 문자가 들어왔으니 화면이 재어 둔 값은 낡았다
+  return result;
 }
 
 /**

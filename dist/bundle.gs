@@ -37,12 +37,16 @@ const CONFIG = {
  * 들어가기 쉬운데, 그러면 화면에서 친 값(앞뒤를 떼고 보낸다)과 영영 어긋난다.
  * 비교하는 쪽마다 따로 떼지 않도록 여기 한 곳에서 다듬는다.
  */
+var TOKEN_ = null;
+
 function getIngestToken_() {
+  if (TOKEN_) return TOKEN_;
   const token = PropertiesService.getScriptProperties().getProperty('INGEST_TOKEN');
   if (!token || !String(token).trim()) {
     throw new Error('스크립트 속성 INGEST_TOKEN이 없습니다.');
   }
-  return String(token).trim();
+  TOKEN_ = String(token).trim();
+  return TOKEN_;
 }
 
 /** 받은 토큰이 맞는지 본다. 양쪽 다 앞뒤 공백을 떼고 견준다. */
@@ -200,7 +204,7 @@ function ensureSheets_() {
   });
   // 만든 시트가 곧바로 보이도록 쓰기를 밀어낸다.
   // 이걸 안 하면 방금 만든 시트를 바로 뒤에서 못 찾는 일이 있다.
-  if (made) { SpreadsheetApp.flush(); invalidate_(); }
+  if (made) { SpreadsheetApp.flush(); SS_ = null; invalidate_(); }
   return made;
 }
 
@@ -211,12 +215,18 @@ function ensureSheets_() {
  * 비어 온다. 그때는 무엇이 잘못됐는지 알려 주고 멈춘다 — 엉뚱한 곳에 쓰는 것보다
  * 낫다. SHEET_ID 스크립트 속성이 있으면 그 파일을 쓴다.
  */
+var SS_ = null;
+
 function spreadsheet_() {
+  // 핸들을 받는 것도, 속성을 읽는 것도 공짜가 아니다.
+  // sheet_() 가 부를 때마다 새로 받으면 그만큼 느려진다.
+  if (SS_) return SS_;
+
   const id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
-  if (id) return SpreadsheetApp.openById(id);
+  if (id) { SS_ = SpreadsheetApp.openById(id); return SS_; }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss) return ss;
+  if (ss) { SS_ = ss; return SS_; }
 
   throw new Error('스프레드시트를 찾을 수 없습니다. 스크립트가 시트에 붙어 있지 않은 것 같아요. ' +
                   '프로젝트 설정 > 스크립트 속성에 SHEET_ID 로 시트 주소의 /d/ 와 /edit 사이 값을 넣어 주세요.');
@@ -1669,7 +1679,9 @@ function ingest(payload) {
     return { status: 'parse_failed', rawId: rawId, note: parsed.note };
   }
 
-  return materialize_(parsed, rawId, location);
+  const result = materialize_(parsed, rawId, location);
+  bustPayload_();   // 문자가 들어왔으니 화면이 재어 둔 값은 낡았다
+  return result;
 }
 
 /**
@@ -2814,8 +2826,38 @@ function requireToken_(token) {
   if (!tokenMatches_(token)) throw new Error('unauthorized');
 }
 
+/**
+ * 화면이 쓸 값을 한 번에 내려보낸다.
+ *
+ * 만드는 데 드는 시간이 적지 않아 잠깐 재어 둔다. 무엇이든 고치면 곧바로
+ * 버리므로, 고친 값이 안 보이는 일은 없다. 재는 칸이 100KB까지라
+ * 그보다 큰 짐은 그냥 매번 만든다.
+ */
 function apiLoad(token) {
   requireToken_(token);
+
+  const cache = CacheService.getScriptCache();
+  try {
+    const hit = cache.get('payload');
+    if (hit) return JSON.parse(hit);
+  } catch (e) { /* 캐시는 없어도 그만이다 */ }
+
+  const data = buildPayload_();
+
+  try {
+    const text = JSON.stringify(data);
+    if (text.length < 90000) cache.put('payload', text, 300);
+  } catch (e) { /* 마찬가지 */ }
+
+  return data;
+}
+
+/** 값이 바뀌었으니 재어 둔 것을 버린다. */
+function bustPayload_() {
+  try { CacheService.getScriptCache().remove('payload'); } catch (e) {}
+}
+
+function buildPayload_() {
   return {
     ledger: ledger(),
     debts: readAll_('Debt'),
@@ -2883,6 +2925,7 @@ function apiCategorize(token, payload) {
   requireToken_(token);
   const result = categorize(payload);
   if (result.status !== 'ok') throw new Error(result.reason || '분류하지 못했어요');
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -2903,6 +2946,7 @@ function apiManualFromRaw(token, payload) {
     accountId: payload.accountId || '',
   });
   update_('RawMessage', raw.id, { txnId: txn.txnId, parsedOk: true, parseNote: '손으로 넣음' });
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -2910,12 +2954,14 @@ function apiManualFromRaw(token, payload) {
 function apiIgnoreRaw(token, rawId) {
   requireToken_(token);
   update_('RawMessage', rawId, { parsedOk: true, parseNote: '거래 아님' });
+  bustPayload_();
   return apiLoad(token);
 }
 
 function apiSaveSettings(token, patch) {
   requireToken_(token);
   Object.keys(patch).forEach(function (key) { putSetting_(key, patch[key]); });
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -2934,6 +2980,7 @@ function apiSaveDebt(token, debt) {
 
   if (debt.id && findBy_('Debt', 'id', debt.id)) update_('Debt', debt.id, row);
   else { row.id = newId_('debt'); append_('Debt', row); }
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -2953,7 +3000,8 @@ function apiSaveAccount(token, account) {
 
   if (account.id && findBy_('Account', 'id', account.id)) {
     update_('Account', account.id, row);
-    return apiLoad(token);
+    bustPayload_();
+  return apiLoad(token);
   }
 
   // 같은 이름이 있으면 새로 만들지 않고 잔액만 고친다
@@ -2964,12 +3012,14 @@ function apiSaveAccount(token, account) {
     row.issuer = ''; row.last4 = ''; row.closingDay = ''; row.billingDay = '';
     append_('Account', row);
   }
+  bustPayload_();
   return apiLoad(token);
 }
 
 function apiDeleteAccount(token, id) {
   requireToken_(token);
   deleteRow_('Account', id);
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -2988,6 +3038,7 @@ function apiSaveRecurring(token, rule) {
 
   if (rule.id && findBy_('RecurringRule', 'id', rule.id)) update_('RecurringRule', rule.id, row);
   else { row.id = newId_('rec'); append_('RecurringRule', row); }
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -3005,12 +3056,14 @@ function deleteRow_(sheetName, id) {
 function apiDeleteDebt(token, id) {
   requireToken_(token);
   deleteRow_('Debt', id);
+  bustPayload_();
   return apiLoad(token);
 }
 
 function apiDeleteRecurring(token, id) {
   requireToken_(token);
   deleteRow_('RecurringRule', id);
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -3031,6 +3084,7 @@ function apiChangeToken(token, newToken) {
   if (/[\s&?#%+/]/.test(next)) throw new Error('공백과 & ? # % + / 는 쓸 수 없어요');
 
   PropertiesService.getScriptProperties().setProperty('INGEST_TOKEN', next);   // 이미 trim 된 값
+  TOKEN_ = next;
   return { status: 'ok' };
 }
 
@@ -3312,4 +3366,47 @@ function diagnose() {
     Logger.log('✗ 만들다 실패: ' + e.message);
     return { ok: false, reason: String(e.message) };
   }
+}
+
+/**
+ * 어디서 시간이 새는지 잰다.
+ *
+ * "느리다"를 추측으로 고치면 몇 번이고 헛돈다. 편집기에서 이걸 실행하면
+ * 각 단계가 몇 밀리초인지 그대로 찍힌다. 300ms 를 넘는 줄이 범인이다.
+ */
+function benchmark() {
+  const t0 = Date.now();
+  const mark = function (label, fn) {
+    const t = Date.now();
+    let note = '';
+    try { note = fn(); } catch (e) { note = '실패: ' + e.message; }
+    const ms = Date.now() - t;
+    Logger.log((ms + 'ms').padStart(7) + '  ' + label + (note ? '  (' + note + ')' : ''));
+    return ms;
+  };
+
+  Logger.log('── 한 번씩 재기 ──');
+  mark('스프레드시트 핸들', function () { return spreadsheet_().getName(); });
+  mark('토큰 읽기', function () { return getIngestToken_().length + '자'; });
+
+  Logger.log('── 시트별 읽기 (캐시 비우고) ──');
+  Object.keys(SCHEMA).forEach(function (name) {
+    invalidate_(name);
+    mark(name, function () { return readAll_(name).length + '행'; });
+  });
+
+  Logger.log('── 화면이 부르는 것들 ──');
+  mark('ledger()', function () { const l = ledger(); return l.debt.items.length + '개 빚'; });
+  mark('pendingItems_()', function () { return pendingItems_().length + '건'; });
+  mark('unparsedItems_()', function () { return unparsedItems_().length + '건'; });
+
+  Logger.log('── 전부 (화면이 한 번 여는 것과 같음) ──');
+  const total = mark('apiLoad()', function () {
+    const d = apiLoad(getIngestToken_());
+    return JSON.stringify(d).length + '바이트';
+  });
+
+  Logger.log('합계 ' + (Date.now() - t0) + 'ms');
+  if (total > 5000) Logger.log('! apiLoad 가 5초를 넘습니다. 위에서 가장 큰 줄을 보세요.');
+  return total;
 }

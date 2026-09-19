@@ -9,8 +9,38 @@ function requireToken_(token) {
   if (!tokenMatches_(token)) throw new Error('unauthorized');
 }
 
+/**
+ * 화면이 쓸 값을 한 번에 내려보낸다.
+ *
+ * 만드는 데 드는 시간이 적지 않아 잠깐 재어 둔다. 무엇이든 고치면 곧바로
+ * 버리므로, 고친 값이 안 보이는 일은 없다. 재는 칸이 100KB까지라
+ * 그보다 큰 짐은 그냥 매번 만든다.
+ */
 function apiLoad(token) {
   requireToken_(token);
+
+  const cache = CacheService.getScriptCache();
+  try {
+    const hit = cache.get('payload');
+    if (hit) return JSON.parse(hit);
+  } catch (e) { /* 캐시는 없어도 그만이다 */ }
+
+  const data = buildPayload_();
+
+  try {
+    const text = JSON.stringify(data);
+    if (text.length < 90000) cache.put('payload', text, 300);
+  } catch (e) { /* 마찬가지 */ }
+
+  return data;
+}
+
+/** 값이 바뀌었으니 재어 둔 것을 버린다. */
+function bustPayload_() {
+  try { CacheService.getScriptCache().remove('payload'); } catch (e) {}
+}
+
+function buildPayload_() {
   return {
     ledger: ledger(),
     debts: readAll_('Debt'),
@@ -78,6 +108,7 @@ function apiCategorize(token, payload) {
   requireToken_(token);
   const result = categorize(payload);
   if (result.status !== 'ok') throw new Error(result.reason || '분류하지 못했어요');
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -98,6 +129,7 @@ function apiManualFromRaw(token, payload) {
     accountId: payload.accountId || '',
   });
   update_('RawMessage', raw.id, { txnId: txn.txnId, parsedOk: true, parseNote: '손으로 넣음' });
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -105,12 +137,14 @@ function apiManualFromRaw(token, payload) {
 function apiIgnoreRaw(token, rawId) {
   requireToken_(token);
   update_('RawMessage', rawId, { parsedOk: true, parseNote: '거래 아님' });
+  bustPayload_();
   return apiLoad(token);
 }
 
 function apiSaveSettings(token, patch) {
   requireToken_(token);
   Object.keys(patch).forEach(function (key) { putSetting_(key, patch[key]); });
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -129,6 +163,7 @@ function apiSaveDebt(token, debt) {
 
   if (debt.id && findBy_('Debt', 'id', debt.id)) update_('Debt', debt.id, row);
   else { row.id = newId_('debt'); append_('Debt', row); }
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -148,7 +183,8 @@ function apiSaveAccount(token, account) {
 
   if (account.id && findBy_('Account', 'id', account.id)) {
     update_('Account', account.id, row);
-    return apiLoad(token);
+    bustPayload_();
+  return apiLoad(token);
   }
 
   // 같은 이름이 있으면 새로 만들지 않고 잔액만 고친다
@@ -159,12 +195,14 @@ function apiSaveAccount(token, account) {
     row.issuer = ''; row.last4 = ''; row.closingDay = ''; row.billingDay = '';
     append_('Account', row);
   }
+  bustPayload_();
   return apiLoad(token);
 }
 
 function apiDeleteAccount(token, id) {
   requireToken_(token);
   deleteRow_('Account', id);
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -183,6 +221,7 @@ function apiSaveRecurring(token, rule) {
 
   if (rule.id && findBy_('RecurringRule', 'id', rule.id)) update_('RecurringRule', rule.id, row);
   else { row.id = newId_('rec'); append_('RecurringRule', row); }
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -200,12 +239,14 @@ function deleteRow_(sheetName, id) {
 function apiDeleteDebt(token, id) {
   requireToken_(token);
   deleteRow_('Debt', id);
+  bustPayload_();
   return apiLoad(token);
 }
 
 function apiDeleteRecurring(token, id) {
   requireToken_(token);
   deleteRow_('RecurringRule', id);
+  bustPayload_();
   return apiLoad(token);
 }
 
@@ -226,6 +267,7 @@ function apiChangeToken(token, newToken) {
   if (/[\s&?#%+/]/.test(next)) throw new Error('공백과 & ? # % + / 는 쓸 수 없어요');
 
   PropertiesService.getScriptProperties().setProperty('INGEST_TOKEN', next);   // 이미 trim 된 값
+  TOKEN_ = next;
   return { status: 'ok' };
 }
 

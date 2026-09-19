@@ -121,3 +121,46 @@ function diagnose() {
     return { ok: false, reason: String(e.message) };
   }
 }
+
+/**
+ * 어디서 시간이 새는지 잰다.
+ *
+ * "느리다"를 추측으로 고치면 몇 번이고 헛돈다. 편집기에서 이걸 실행하면
+ * 각 단계가 몇 밀리초인지 그대로 찍힌다. 300ms 를 넘는 줄이 범인이다.
+ */
+function benchmark() {
+  const t0 = Date.now();
+  const mark = function (label, fn) {
+    const t = Date.now();
+    let note = '';
+    try { note = fn(); } catch (e) { note = '실패: ' + e.message; }
+    const ms = Date.now() - t;
+    Logger.log((ms + 'ms').padStart(7) + '  ' + label + (note ? '  (' + note + ')' : ''));
+    return ms;
+  };
+
+  Logger.log('── 한 번씩 재기 ──');
+  mark('스프레드시트 핸들', function () { return spreadsheet_().getName(); });
+  mark('토큰 읽기', function () { return getIngestToken_().length + '자'; });
+
+  Logger.log('── 시트별 읽기 (캐시 비우고) ──');
+  Object.keys(SCHEMA).forEach(function (name) {
+    invalidate_(name);
+    mark(name, function () { return readAll_(name).length + '행'; });
+  });
+
+  Logger.log('── 화면이 부르는 것들 ──');
+  mark('ledger()', function () { const l = ledger(); return l.debt.items.length + '개 빚'; });
+  mark('pendingItems_()', function () { return pendingItems_().length + '건'; });
+  mark('unparsedItems_()', function () { return unparsedItems_().length + '건'; });
+
+  Logger.log('── 전부 (화면이 한 번 여는 것과 같음) ──');
+  const total = mark('apiLoad()', function () {
+    const d = apiLoad(getIngestToken_());
+    return JSON.stringify(d).length + '바이트';
+  });
+
+  Logger.log('합계 ' + (Date.now() - t0) + 'ms');
+  if (total > 5000) Logger.log('! apiLoad 가 5초를 넘습니다. 위에서 가장 큰 줄을 보세요.');
+  return total;
+}

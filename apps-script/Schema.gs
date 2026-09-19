@@ -86,7 +86,7 @@ function ensureSheets_() {
   });
   // 만든 시트가 곧바로 보이도록 쓰기를 밀어낸다.
   // 이걸 안 하면 방금 만든 시트를 바로 뒤에서 못 찾는 일이 있다.
-  if (made) { SpreadsheetApp.flush(); invalidate_(); }
+  if (made) { SpreadsheetApp.flush(); SS_ = null; invalidate_(); }
   return made;
 }
 
@@ -97,12 +97,18 @@ function ensureSheets_() {
  * 비어 온다. 그때는 무엇이 잘못됐는지 알려 주고 멈춘다 — 엉뚱한 곳에 쓰는 것보다
  * 낫다. SHEET_ID 스크립트 속성이 있으면 그 파일을 쓴다.
  */
+var SS_ = null;
+
 function spreadsheet_() {
+  // 핸들을 받는 것도, 속성을 읽는 것도 공짜가 아니다.
+  // sheet_() 가 부를 때마다 새로 받으면 그만큼 느려진다.
+  if (SS_) return SS_;
+
   const id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
-  if (id) return SpreadsheetApp.openById(id);
+  if (id) { SS_ = SpreadsheetApp.openById(id); return SS_; }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss) return ss;
+  if (ss) { SS_ = ss; return SS_; }
 
   throw new Error('스프레드시트를 찾을 수 없습니다. 스크립트가 시트에 붙어 있지 않은 것 같아요. ' +
                   '프로젝트 설정 > 스크립트 속성에 SHEET_ID 로 시트 주소의 /d/ 와 /edit 사이 값을 넣어 주세요.');

@@ -55,6 +55,16 @@ function ingest(payload) {
     return { status: 'parse_failed', rawId: rawId, note: parsed.note };
   }
 
+  return materialize_(parsed, rawId, location);
+}
+
+/**
+ * 파싱 결과를 거래로 만든다.
+ *
+ * ingest()와 reprocessAll()이 함께 쓴다. 파서를 고친 뒤 과거 문자를 다시 읽었을 때
+ * 거래까지 생겨야 "원문을 남겨두면 나중에 복구된다"가 실제로 성립한다.
+ */
+function materialize_(parsed, rawId, location) {
   // [6] 앵커 — 문자에 찍힌 잔액/누적을 기록해 두고 나중에 앱 계산값과 대조한다
   recordAnchors_(parsed, rawId);
 
@@ -282,7 +292,10 @@ function reprocessAll(fromVersion) {
   const rows = readAll_('RawMessage').filter(function (r) {
     return Number(r.parserVersion) < target || r.parsedOk !== true;
   });
-  let fixed = 0;
+
+  let nowParsed = 0;
+  let created = 0;
+
   rows.forEach(function (r) {
     const parsed = parseMessage_(r.body, r.sender, new Date(r.receivedAt));
     update_('RawMessage', r.id, {
@@ -290,7 +303,19 @@ function reprocessAll(fromVersion) {
       parsedOk: parsed.ok,
       parseNote: parsed.note,
     });
-    if (parsed.ok) fixed++;
+    if (!parsed.ok) return;
+    nowParsed++;
+
+    // 이미 거래가 달린 문자는 건드리지 않는다. 두 번 세면 안 된다.
+    if (r.txnId) return;
+    if (parsed.kind === 'ad') return;
+
+    // 좌표는 수집 시점에만 얻을 수 있어 재처리로는 되살릴 수 없다
+    const result = materialize_(parsed, r.id, null);
+    if (result.txnId) created++;
   });
-  return { scanned: rows.length, nowParsed: fixed };
+
+  Logger.log('훑은 문자 ' + rows.length + '건 · 이제 읽힘 ' + nowParsed +
+             '건 · 새로 만든 거래 ' + created + '건');
+  return { scanned: rows.length, nowParsed: nowParsed, created: created };
 }

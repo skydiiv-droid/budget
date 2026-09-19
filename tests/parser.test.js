@@ -112,6 +112,14 @@ check('[실물] 보낸 사람 이름을 상대로 남긴다', () => {
   assert.strictEqual(r.merchantRaw, '홍길동', '누가 보냈는지가 더치페이 정산에 쓰인다');
 });
 
+check('[실물] 1원 이체도 금액으로 읽는다', () => {
+  const r = parse(['[Web발신]', '우리 09/19 14:16', '*123456',
+                   '입금 1원', '홍길동', '잔액 500,001원'].join('\n'), '');
+  assert.strictEqual(r.amount, 1, '테스트 송금은 보통 1원이라 이게 막히면 첫 확인부터 막힌다');
+  assert.strictEqual(r.balance, 500001);
+  assert.strictEqual(r.ok, true);
+});
+
 check('"원"이 붙은 소액도 금액으로 읽는다', () => {
   const r = parse('[현대카드] 09/15 12:34 승인 50원 일시불 테스트', '15771234');
   assert.strictEqual(r.amount, 50, '세 자리 미만이라고 버리면 안 된다');

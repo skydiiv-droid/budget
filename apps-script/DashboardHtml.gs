@@ -20,14 +20,21 @@ const DASHBOARD_HTML = `<!doctype html>
 body{margin:0;background:var(--ground);color:var(--ink);
   font-family:"IBM Plex Sans KR",sans-serif;-webkit-font-smoothing:antialiased;
   padding-bottom:env(safe-area-inset-bottom)}
-.wrap{max-width:460px;margin:0 auto;padding:18px 16px 40px}
+.wrap{max-width:460px;margin:0 auto;padding:18px 16px 92px}
 h1{font-size:21px;font-weight:600;margin:0;letter-spacing:-.01em}
 .sub{font-size:12px;color:var(--ink3)}
-.tabs{display:flex;gap:6px;margin:14px 0 16px}
-.tabs button{flex:1;min-height:44px;font:inherit;font-size:13.5px;font-weight:500;
-  background:var(--card);color:var(--ink2);border:1px solid var(--line);
-  border-radius:11px;cursor:pointer}
-.tabs button[aria-current="page"]{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600}
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:5;display:flex;
+  background:rgba(255,255,255,.96);border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom);backdrop-filter:blur(8px)}
+.tabs button{flex:1;min-height:54px;font:inherit;font-size:12px;font-weight:500;
+  background:none;color:var(--ink3);border:0;cursor:pointer;position:relative;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
+.tabs button[aria-current="page"]{color:var(--ink);font-weight:700}
+.tabs button[aria-current="page"]::before{content:"";position:absolute;top:0;
+  width:26px;height:2px;border-radius:0 0 2px 2px;background:var(--ink)}
+.tabs .badge{position:absolute;top:8px;margin-left:30px;min-width:17px;height:17px;
+  padding:0 4px;border-radius:9px;background:var(--debt);color:#fff;
+  font-size:10.5px;font-weight:700;line-height:17px;text-align:center}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
   padding:18px;margin-bottom:12px}
 .row{display:flex;align-items:center;gap:10px}
@@ -74,16 +81,18 @@ button.tiny{font-size:12px;padding:7px 11px;min-height:36px;background:#F2EEE6;
     <div class="grow"><h1>가계부</h1><div class="sub" id="monthLabel">불러오는 중</div></div>
   </div>
 
-  <nav class="tabs" aria-label="화면">
-    <button type="button" data-tab="home" aria-current="page">홈</button>
-    <button type="button" data-tab="fixed">고정지출</button>
-    <button type="button" data-tab="setup">설정</button>
-  </nav>
-
   <section id="home"></section>
+  <section id="inbox" hidden></section>
   <section id="fixed" hidden></section>
   <section id="setup" hidden></section>
 </div>
+
+<nav class="tabs" aria-label="화면">
+  <button type="button" data-tab="home" aria-current="page">홈</button>
+  <button type="button" data-tab="inbox">인박스<span class="badge" id="badge" hidden>0</span></button>
+  <button type="button" data-tab="fixed">고정</button>
+  <button type="button" data-tab="setup">설정</button>
+</nav>
 
 <script>
 /* 토큰은 URL에 두지 않는다. 주소가 길어지는 것보다, 방문 기록과 화면 캡처에
@@ -120,7 +129,7 @@ function fail(err){ toast('실패: ' + (err && err.message ? err.message : err))
 
 function showUnlock(msg){
   document.querySelector('.tabs').hidden = true;
-  el('fixed').hidden = true; el('setup').hidden = true;
+  el('inbox').hidden = true; el('fixed').hidden = true; el('setup').hidden = true;
   el('home').hidden = false;
   el('monthLabel').textContent = '잠김';
   el('home').innerHTML =
@@ -234,8 +243,11 @@ function renderHome(){
   }
 
   if (L.inbox.pending || L.inbox.unparsed){
-    h += '<div class="note warn">손이 필요한 것 — 분류 대기 <b>' + L.inbox.pending
-      +  '건</b>, 해석 실패 문자 <b>' + L.inbox.unparsed + '건</b></div>';
+    h += '<button type="button" class="note warn" data-tab="inbox" style="width:100%;'
+      +  'text-align:left;cursor:pointer;font:inherit;display:block">'
+      +  '손이 필요한 것 — 분류 대기 <b>' + L.inbox.pending + '건</b>, '
+      +  '해석 실패 문자 <b>' + L.inbox.unparsed + '건</b><br>'
+      +  '<span style="text-decoration:underline">인박스에서 정리하기</span></button>';
   }
   el('home').innerHTML = h;
 }
@@ -244,6 +256,92 @@ function flowRow(name, amount, color, sign){
   return '<div class="row" style="padding:5px 0"><span class="grow" style="font-size:13.5px;color:var(--ink2)">'
     + name + '</span><span class="num" style="font-size:13.5px;font-weight:600;color:' + color + '">'
     + sign + ' ' + won(amount) + '</span></div>';
+}
+
+/* ───────── 인박스 ───────── */
+function renderInbox(){
+  var h = '';
+  var P = D.pending || [], U = D.unparsed || [];
+
+  if (!P.length && !U.length){
+    h = '<div class="card"><div class="empty">정리할 게 없어요.<br>'
+      + '분류하지 못한 결제가 생기면 여기에 쌓입니다.</div></div>';
+    el('inbox').innerHTML = h;
+    return;
+  }
+
+  if (P.length){
+    h += '<div class="lbl" style="margin:2px 0 9px">분류가 필요해요 · ' + P.length + '건</div>';
+    P.forEach(function(t){
+      h += '<div class="card" data-txn="' + esc(t.id) + '">'
+        +  '<div class="row" style="align-items:flex-start">'
+        +  '<span class="grow"><span style="font-size:15px;font-weight:600">' + esc(t.merchant) + '</span>'
+        +  '<br><span class="muted">' + esc(String(t.occurredAt).replace('T',' ').slice(5,16))
+        +  (t.account ? ' · ' + esc(t.account) : '') + '</span></span>'
+        +  '<span class="big num" style="font-size:22px">' + won(t.amount) + '</span></div>';
+
+      if (t.nearbyNote){
+        h += '<div class="note ok" style="margin:12px 0 0;padding:9px 12px">'
+          +  esc(t.nearbyNote) + ' 왔던 곳이에요</div>';
+      }
+
+      h += '<div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:13px">';
+      t.suggestions.forEach(function(c, i){
+        h += '<button type="button" class="act ' + (i === 0 ? 'primary' : 'ghost')
+          +  '" data-pick="' + esc(t.id) + '" data-cat="' + esc(c.id) + '">'
+          +  esc(c.name) + '</button>';
+      });
+      h += '</div>';
+
+      h += '<div class="hr"></div><div class="fields">'
+        +  '<div class="field" style="margin:0"><label>그 밖의 카테고리</label>'
+        +  '<select data-other="' + esc(t.id) + '"><option value="">고르기…</option>'
+        +  D.categories.map(function(c){
+              return '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>'; }).join('')
+        +  '</select></div>'
+        +  '<div class="field" style="margin:0"><label>앞으로</label>'
+        +  '<select data-scope="' + esc(t.id) + '">'
+        +  t.scopeOptions.map(function(o){
+              return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }).join('')
+        +  '</select></div></div></div>';
+    });
+  }
+
+  if (U.length){
+    h += '<div class="lbl" style="margin:18px 0 9px">해석하지 못한 문자 · ' + U.length + '건</div>';
+    U.forEach(function(r){
+      h += '<form class="card" data-raw="' + esc(r.id) + '">'
+        +  '<div style="background:var(--ground);border-radius:9px;padding:10px 12px;'
+        +  'font-size:11.5px;color:var(--ink2);line-height:1.6;white-space:pre-line">'
+        +  esc(r.body) + '</div>'
+        +  (r.note ? '<div class="muted" style="margin-top:8px">' + esc(r.note) + '</div>' : '')
+        +  '<div class="fields" style="margin-top:12px">'
+        +  '<div class="field" style="margin:0"><label>금액</label>'
+        +  '<input name="amount" inputmode="numeric" placeholder="9,900"></div>'
+        +  '<div class="field" style="margin:0"><label>가맹점</label>'
+        +  '<input name="merchant" placeholder="어디서 썼나요"></div></div>'
+        +  '<div class="field"><label>카테고리</label><select name="categoryId">'
+        +  '<option value="">고르지 않음</option>'
+        +  D.categories.map(function(c){
+              return '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>'; }).join('')
+        +  '</select></div>'
+        +  '<div style="display:flex;gap:7px">'
+        +  '<button type="submit" class="act primary" style="flex:1">거래로 넣기</button>'
+        +  '<button type="button" class="act ghost" data-ignore="' + esc(r.id) + '">거래 아님</button>'
+        +  '</div></form>';
+    });
+  }
+
+  el('inbox').innerHTML = h;
+}
+
+function pickCategory(txnId, categoryId){
+  var scopeSel = document.querySelector('[data-scope="' + txnId + '"]');
+  call('apiCategorize', {
+    txnId: txnId,
+    choice: categoryId,
+    scopeChoice: scopeSel ? scopeSel.value : '',
+  });
 }
 
 /* ───────── 고정지출 ───────── */
@@ -362,18 +460,31 @@ function formData(form){
 function render(data){
   D = data;
   el('monthLabel').textContent = D.ledger.month + ' · 1일 ~ 말일';
-  renderHome(); renderFixed(); renderSetup();
+  var waiting = (D.pending || []).length + (D.unparsed || []).length;
+  var badge = el('badge');
+  badge.hidden = !waiting;
+  badge.textContent = waiting > 99 ? '99+' : waiting;
+  renderHome(); renderInbox(); renderFixed(); renderSetup();
+}
+
+function showTab(name){
+  ['home','inbox','fixed','setup'].forEach(function(id){ el(id).hidden = (id !== name); });
+  document.querySelectorAll('.tabs [data-tab]').forEach(function(b){
+    if (b.dataset.tab === name) b.setAttribute('aria-current','page');
+    else b.removeAttribute('aria-current');
+  });
+  window.scrollTo(0, 0);
 }
 
 document.addEventListener('click', function(e){
   var tab = e.target.closest('[data-tab]');
-  if (tab){
-    ['home','fixed','setup'].forEach(function(id){ el(id).hidden = (id !== tab.dataset.tab); });
-    document.querySelectorAll('[data-tab]').forEach(function(b){
-      if (b === tab) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current');
-    });
-    return;
-  }
+  if (tab){ showTab(tab.dataset.tab); return; }
+
+  var pick = e.target.closest('[data-pick]');
+  if (pick){ pickCategory(pick.dataset.pick, pick.dataset.cat); return; }
+
+  var ig = e.target.closest('[data-ignore]');
+  if (ig){ call('apiIgnoreRaw', ig.dataset.ignore); return; }
   if (e.target.id === 'lockBtn'){
     forgetToken(); TOKEN = '';
     showUnlock('토큰을 지웠어요.');
@@ -385,9 +496,19 @@ document.addEventListener('click', function(e){
   if (dr && confirm('지울까요?')) { call('apiDeleteRecurring', dr.dataset.delRec); return; }
 });
 
+document.addEventListener('change', function(e){
+  var other = e.target.closest('[data-other]');
+  if (other && other.value) pickCategory(other.dataset.other, other.value);
+});
+
 document.addEventListener('submit', function(e){
   e.preventDefault();
   var f = e.target;
+  if (f.dataset.raw){
+    var d = formData(f); d.rawId = f.dataset.raw;
+    call('apiManualFromRaw', d);
+    return;
+  }
   if (f.id === 'unlockForm'){
     TOKEN = f.elements.token.value.trim();
     if (TOKEN) load();

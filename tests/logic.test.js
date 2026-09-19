@@ -241,6 +241,90 @@ check('이미 분류한 건은 새 규칙이 덮어쓰지 않는다', () => {
     '일부러 다르게 넣었을 수 있다');
 });
 
+console.log('\n인박스');
+
+function inbox(extra) {
+  const store = createStore({
+    Account: [{ id: 'acc_hd_emart', name: '현대 이마트Plus', type: 'card', issuer: '현대카드' }],
+    ...extra,
+  });
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Menu.gs',
+                    'Settlement.gs', 'Ingest.gs', 'Ledger.gs', 'Web.gs'], store);
+  ctx.seedCategories_ = null;
+  return { ctx, store };
+}
+
+function seedCats(store) {
+  [['cat_dining','외식','🍚'],['cat_cafe','카페','☕'],['cat_delivery','배달','🛵'],
+   ['cat_shopping','쇼핑','🛍️']].forEach(function (r, i) {
+    store.append_('Category', { id: r[0], name: r[1], icon: r[2], kind: 'expense', sortOrder: i });
+  });
+}
+
+check('미분류 거래를 화면이 바로 그릴 수 있게 갖춰 보낸다', () => {
+  const { ctx, store } = inbox({
+    Transaction: [{ id: 't1', type: 'expense', status: 'pendingCategory',
+                    amount: 12000, merchantRaw: '네이버파이낸셜',
+                    occurredAt: '2026-09-20T21:30:00', accountId: 'acc_hd_emart' }],
+  });
+  seedCats(store);
+  const items = ctx.pendingItems_();
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].merchant, '네이버파이낸셜');
+  assert.strictEqual(items[0].amount, 12000);
+  assert.strictEqual(items[0].account, '현대 이마트Plus');
+  assert.ok(items[0].suggestions.length > 0, '고를 버튼이 있어야 한다');
+  assert.ok(items[0].scopeOptions.length >= 2, '범위 선택지가 있어야 한다');
+});
+
+check('분류가 끝난 거래는 인박스에 남지 않는다', () => {
+  const { ctx, store } = inbox({
+    Transaction: [{ id: 't1', type: 'expense', status: 'confirmed',
+                    amount: 5000, merchantRaw: '컴포즈커피', occurredAt: '2026-09-20T10:00:00' }],
+  });
+  seedCats(store);
+  assert.strictEqual(ctx.pendingItems_().length, 0);
+});
+
+check('같은 자리에 온 적이 있으면 그 사실을 알려 준다', () => {
+  const past = function (n) {
+    return { id: 'p' + n, type: 'expense', status: 'confirmed', categoryId: 'cat_dining',
+             amount: 9000, merchantRaw: '네이버파이낸셜', lat: 37.5, lon: 127.0,
+             occurredAt: '2026-09-1' + n + 'T12:00:00' };
+  };
+  const { ctx, store } = inbox({
+    Transaction: [past(1), past(2), past(3),
+      { id: 't1', type: 'expense', status: 'pendingCategory', amount: 12000,
+        merchantRaw: '네이버파이낸셜', lat: 37.5, lon: 127.0,
+        occurredAt: '2026-09-20T21:30:00' }],
+  });
+  seedCats(store);
+  const item = ctx.pendingItems_()[0];
+  assert.ok(item.nearbyNote.indexOf('3번') >= 0, item.nearbyNote);
+  assert.strictEqual(item.suggestions[0].id, 'cat_dining', '짚이는 것이 맨 앞에 와야 한다');
+});
+
+check('읽지 못한 문자만 인박스에 올린다', () => {
+  const { ctx, store } = inbox({
+    RawMessage: [
+      { id: 'r1', body: '해외승인 USD 9.99', parsedOk: false, txnId: '', receivedAt: '2026-09-17T03:12:00' },
+      { id: 'r2', body: '정상 문자', parsedOk: true, txnId: 't9', receivedAt: '2026-09-18T03:12:00' },
+    ],
+  });
+  seedCats(store);
+  const items = ctx.unparsedItems_();
+  assert.strictEqual(items.length, 1);
+  assert.strictEqual(items[0].id, 'r1');
+});
+
+check('거래로 만든 문자는 인박스에서 빠진다', () => {
+  const { ctx, store } = inbox({
+    RawMessage: [{ id: 'r1', body: 'x', parsedOk: false, txnId: 't1', receivedAt: '2026-09-17T03:12:00' }],
+  });
+  seedCats(store);
+  assert.strictEqual(ctx.unparsedItems_().length, 0, '이미 거래가 달렸으면 할 일이 아니다');
+});
+
 console.log('\n계산 (Ledger)');
 
 function books(extra) {

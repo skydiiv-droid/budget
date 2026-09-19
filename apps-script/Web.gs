@@ -25,7 +25,86 @@ function apiLoad(token) {
       debtTargetDate: setting_('debtTargetDate', ''),
     },
     categories: readAll_('Category').filter(function (c) { return c.kind === 'expense'; }),
+    pending: pendingItems_(),
+    unparsed: unparsedItems_(),
   };
+}
+
+/**
+ * 아직 분류하지 않은 거래. 화면이 바로 그릴 수 있게 미리 갖춰 보낸다.
+ * 고를 만한 카테고리와 규칙 범위까지 서버가 정해 준다.
+ */
+function pendingItems_() {
+  const accounts = {};
+  readAll_('Account').forEach(function (a) { accounts[a.id] = a.name; });
+
+  return readAll_('Transaction')
+    .filter(function (t) { return t.status === 'pendingCategory' && t.type === 'expense'; })
+    .sort(function (a, b) { return String(b.occurredAt).localeCompare(String(a.occurredAt)); })
+    .slice(0, 30)
+    .map(function (t) {
+      const nearby = nearbyCategory_(
+        (t.lat === '' || t.lat === null || t.lat === undefined)
+          ? null : { lat: t.lat, lon: t.lon });
+
+      return {
+        id: t.id,
+        merchant: t.merchantRaw || '(가맹점 미상)',
+        amount: Number(t.amount || 0),
+        occurredAt: t.occurredAt,
+        account: accounts[t.accountId] || '',
+        suggestions: suggestionsFor_({ nearby: nearby }),
+        scopeOptions: scopeMenuText_(t.merchantRaw).split('\n'),
+        nearbyNote: (nearby && nearby.categoryId && nearby.samples)
+          ? ('같은 자리에서 ' + nearby.samples + '번') : '',
+      };
+    });
+}
+
+/** 파서가 읽지 못한 문자. 원문을 보여 주고 손으로 넣게 한다. */
+function unparsedItems_() {
+  return readAll_('RawMessage')
+    .filter(function (r) { return r.parsedOk !== true && !r.txnId; })
+    .sort(function (a, b) { return String(b.receivedAt).localeCompare(String(a.receivedAt)); })
+    .slice(0, 20)
+    .map(function (r) {
+      return { id: r.id, body: r.body, receivedAt: r.receivedAt, note: r.parseNote || '' };
+    });
+}
+
+/** 인박스에서 카테고리를 고르면 호출된다. categorize 와 같은 일을 한다. */
+function apiCategorize(token, payload) {
+  requireToken_(token);
+  const result = categorize(payload);
+  if (result.status !== 'ok') throw new Error(result.reason || '분류하지 못했어요');
+  return apiLoad(token);
+}
+
+/** 읽지 못한 문자를 손으로 거래로 만든다. */
+function apiManualFromRaw(token, payload) {
+  requireToken_(token);
+  const raw = findBy_('RawMessage', 'id', payload.rawId);
+  if (!raw) throw new Error('문자를 찾을 수 없어요');
+
+  const amount = parseAmount_(payload.amount);
+  if (!amount) throw new Error('금액을 넣어 주세요');
+
+  const txn = manualEntry({
+    amount: amount,
+    merchant: payload.merchant || '',
+    categoryId: payload.categoryId || '',
+    occurredAt: raw.receivedAt,
+    accountId: payload.accountId || '',
+  });
+  update_('RawMessage', raw.id, { txnId: txn.txnId, parsedOk: true, parseNote: '손으로 넣음' });
+  return apiLoad(token);
+}
+
+/** 거래가 아닌 문자(광고 등)를 치운다. 원문은 남긴다. */
+function apiIgnoreRaw(token, rawId) {
+  requireToken_(token);
+  update_('RawMessage', rawId, { parsedOk: true, parseNote: '거래 아님' });
+  return apiLoad(token);
 }
 
 function apiSaveSettings(token, patch) {

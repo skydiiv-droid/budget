@@ -3456,52 +3456,68 @@ function diagnose() {
 /**
  * 어디서 시간이 새는지 잰다.
  *
- * "느리다"를 추측으로 고치면 몇 번이고 헛돈다. 편집기에서 이걸 실행하면
- * 각 단계가 몇 밀리초인지 그대로 찍힌다. 300ms 를 넘는 줄이 범인이다.
+ * 앱이 실제로 쓰는 시간을 맨 먼저, 따로 찍는다. 그 아래 자세한 내역은
+ * 시트를 일부러 하나씩 읽어 본 것이라 앱보다 훨씬 오래 걸린다 —
+ * 그 합계를 앱 속도로 읽으면 안 된다.
  */
 function benchmark() {
-  const t0 = Date.now();
   const mark = function (label, fn) {
     const t = Date.now();
     let note = '';
     try { note = fn(); } catch (e) { note = '실패: ' + e.message; }
     const ms = Date.now() - t;
-    Logger.log((ms + 'ms').padStart(7) + '  ' + label + (note ? '  (' + note + ')' : ''));
+    Logger.log((ms + 'ms').padStart(8) + '  ' + label + (note ? '  (' + note + ')' : ''));
     return ms;
   };
 
-  Logger.log('── 한 번씩 재기 ──');
+  const cold = function () {
+    invalidate_();
+    SS_ = null;
+    try { CacheService.getScriptCache().remove('payload'); } catch (e) {}
+  };
+
+  Logger.log('══ 앱이 실제로 쓰는 시간 ══');
+  cold();
+  const first = mark('처음 열기', function () {
+    return JSON.stringify(apiLoad(getIngestToken_())).length + '바이트';
+  });
+  const again = mark('다시 열기 (재어 둔 값)', function () {
+    return apiLoad(getIngestToken_()).ledger.month;
+  });
+
+  Logger.log('');
+  if (typeof Sheets === 'undefined') {
+    Logger.log('! Sheets 고급 서비스가 꺼져 있습니다. 편집기 왼쪽 "서비스" + 에서');
+    Logger.log('  Google Sheets API 를 추가하면 시트를 한 번에 읽어 훨씬 빨라집니다.');
+  } else if (first < 1000) {
+    Logger.log('✓ 서버는 충분히 빠릅니다. 더 느리게 느껴진다면 서버가 아니라');
+    Logger.log('  브라우저가 화면을 띄우는 시간입니다.');
+  } else {
+    Logger.log('! 처음 열기가 1초를 넘습니다. 아래 내역에서 큰 줄을 보세요.');
+  }
+
+  Logger.log('');
+  Logger.log('══ 아래는 참고용입니다 ══');
+  Logger.log('시트를 일부러 하나씩 읽어 봅니다. 앱은 이렇게 하지 않으므로');
+  Logger.log('이 합계를 앱 속도로 읽지 마세요.');
+  Logger.log('');
+
+  cold();
   mark('스프레드시트 핸들', function () { return spreadsheet_().getName(); });
   mark('토큰 읽기', function () { return getIngestToken_().length + '자'; });
 
-  Logger.log('── 시트별 읽기 (캐시 비우고) ──');
+  cold();
+  mark('한꺼번에 가져오기', function () {
+    const ok = preload_(PAYLOAD_SHEETS);
+    return ok ? (PAYLOAD_SHEETS.length + '시트 한 번에') : 'Sheets 서비스 꺼짐';
+  });
+
+  Logger.log('');
+  Logger.log('시트별 (하나씩 읽을 때):');
   Object.keys(SCHEMA).forEach(function (name) {
     invalidate_(name);
-    mark(name, function () { return readAll_(name).length + '행'; });
+    mark('  ' + name, function () { return readAll_(name).length + '행'; });
   });
 
-  Logger.log('── 한꺼번에 가져오기 ──');
-  invalidate_();
-  mark('preload_()', function () {
-    const ok = preload_(PAYLOAD_SHEETS);
-    return ok ? (typeof Sheets === 'undefined' ? '건너뜀' : '9시트 한 번에')
-              : 'Sheets 서비스 꺼짐 — 편집기 왼쪽 서비스 + 에서 켜면 훨씬 빨라집니다';
-  });
-
-  Logger.log('── 화면이 부르는 것들 ──');
-  mark('ledger()', function () { const l = ledger(); return l.debt.items.length + '개 빚'; });
-  mark('pendingItems_()', function () { return pendingItems_().length + '건'; });
-  mark('unparsedItems_()', function () { return unparsedItems_().length + '건'; });
-
-  Logger.log('── 전부 (찬 상태에서 처음 여는 것과 같음) ──');
-  invalidate_();
-  try { CacheService.getScriptCache().remove('payload'); } catch (e) {}
-  const total = mark('apiLoad()', function () {
-    const d = apiLoad(getIngestToken_());
-    return JSON.stringify(d).length + '바이트';
-  });
-
-  Logger.log('합계 ' + (Date.now() - t0) + 'ms');
-  if (total > 5000) Logger.log('! apiLoad 가 5초를 넘습니다. 위에서 가장 큰 줄을 보세요.');
-  return total;
+  return { first: first, again: again };
 }

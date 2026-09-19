@@ -1,6 +1,6 @@
 /** 정산(더치페이) 금액 계산과 위치 매칭 테스트. */
 const assert = require('assert');
-const { load } = require('./harness');
+const { load, plain } = require('./harness');
 const { createStore } = require('./store');
 
 let passed = 0;
@@ -239,6 +239,79 @@ check('이미 분류한 건은 새 규칙이 덮어쓰지 않는다', () => {
   ctx.applyToPending_('cat_dining', 'contains', '동네빵집');
   assert.strictEqual(store.findBy_('Transaction', 'id', 't1').categoryId, 'cat_etc',
     '일부러 다르게 넣었을 수 있다');
+});
+
+console.log('\n단축어 메뉴');
+
+function menuCtx(transactions) {
+  const store = createStore({ Transaction: transactions || [] });
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Menu.gs', 'Seed.gs', 'Ingest.gs'], store);
+  ctx.seedCategories_();
+  ctx.seedRules_();
+  ctx.seedMerchants_();
+  return { ctx, store };
+}
+
+check('메뉴는 줄바꿈으로 이어진 글자다', () => {
+  const { ctx } = menuCtx();
+  const lines = ctx.categoryMenuText_({}).split('\n');
+  assert.ok(lines.length >= 10, '지출 카테고리가 모두 들어가야 한다');
+  assert.ok(lines.some((l) => l.indexOf('카페') >= 0));
+  assert.ok(lines.every((l) => l.indexOf('급여') < 0), '수입은 지출 메뉴에 없어야 한다');
+});
+
+check('위치로 짚인 카테고리가 메뉴 맨 앞에 온다', () => {
+  const { ctx } = menuCtx();
+  const decision = { nearby: { categoryId: 'cat_medical', samples: 4, confident: true } };
+  assert.ok(ctx.categoryMenuText_(decision).split('\n')[0].indexOf('의료') >= 0);
+});
+
+check('메뉴에서 고른 글자를 카테고리로 되돌린다', () => {
+  const { ctx } = menuCtx();
+  assert.strictEqual(ctx.resolveCategory_('☕ 카페'), 'cat_cafe', '아이콘이 붙어 돌아온다');
+  assert.strictEqual(ctx.resolveCategory_('카페'), 'cat_cafe');
+  assert.strictEqual(ctx.resolveCategory_('cat_cafe'), 'cat_cafe');
+  assert.strictEqual(ctx.resolveCategory_('없는카테고리'), null);
+});
+
+check('범위 메뉴는 아는 브랜드를 첫 줄에 둔다', () => {
+  const { ctx } = menuCtx();
+  const lines = ctx.scopeMenuText_('컴포즈커피발산').split('\n');
+  assert.strictEqual(lines[0], '모두: 컴포즈');
+  assert.strictEqual(lines[1], '이 가게만: 컴포즈커피발산');
+  assert.strictEqual(lines[2], '이번만');
+});
+
+check('짚이는 브랜드가 없으면 "모두" 줄을 안 만든다', () => {
+  const { ctx } = menuCtx();
+  const lines = ctx.scopeMenuText_('듣도보도못한가게').split('\n');
+  assert.strictEqual(lines.length, 2, '고를 수 없는 선택지를 띄우면 안 된다');
+  assert.ok(lines[0].indexOf('이 가게만') === 0);
+});
+
+check('범위 메뉴에서 고른 글자를 그대로 해석한다', () => {
+  const { ctx } = menuCtx();
+  const merchant = '컴포즈커피발산';
+  const menu = ctx.scopeMenuText_(merchant).split('\n');
+
+  assert.deepStrictEqual(plain(ctx.parseScopeChoice_(menu[0], merchant)),
+    { scope: 'contains', keyword: '컴포즈' });
+  assert.deepStrictEqual(plain(ctx.parseScopeChoice_(menu[1], merchant)),
+    { scope: 'exact', keyword: '컴포즈커피발산' });
+  assert.strictEqual(ctx.parseScopeChoice_(menu[2], merchant).scope, 'once');
+});
+
+check('범위를 안 고르면 권하는 범위를 쓴다', () => {
+  const { ctx } = menuCtx();
+  assert.strictEqual(ctx.parseScopeChoice_('', '컴포즈커피발산').scope, 'contains');
+});
+
+check('알림 문구에 배운 내용이 들어간다', () => {
+  const { ctx } = menuCtx();
+  const msg = ctx.confirmMessage_('cat_cafe', { scope: 'contains', keyword: '컴포즈' }, 2);
+  assert.ok(msg.indexOf('카페') >= 0);
+  assert.ok(msg.indexOf('컴포즈') >= 0);
+  assert.ok(msg.indexOf('2건') >= 0);
 });
 
 console.log('\n위치 매칭');

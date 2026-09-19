@@ -17,7 +17,7 @@ const TARGETS = {
   'budget-parser.gs': ['Parse.gs'],
   'budget-core.gs': [
     'Config.gs', 'Util.gs', 'Schema.gs', 'Seed.gs',
-    'Classify.gs', 'Settlement.gs', 'Ingest.gs', 'Code.gs', 'Debug.gs',
+    'Classify.gs', 'Menu.gs', 'Settlement.gs', 'Ingest.gs', 'Code.gs', 'Debug.gs',
   ],
 };
 

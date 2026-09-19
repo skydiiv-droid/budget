@@ -2,7 +2,7 @@
  * 웹앱 진입점.
  *
  *   POST  {action:"ingest",     token, body, sender, receivedAt, lat, lon, placeName}
- *   POST  {action:"categorize", token, txnId, categoryId, scope?, keyword?}
+ *   POST  {action:"categorize", token, txnId, choice, scopeChoice?}
  *   POST  {action:"forgetRule",  token, pattern}
  *   POST  {action:"manual",     token, amount, categoryId, memo, occurredAt}
  *   POST  {action:"split",      token, txnId, headcount | expectedAmount}
@@ -100,26 +100,30 @@ function categorize(payload) {
   const txn = findBy_('Transaction', 'id', payload.txnId);
   if (!txn) return { status: 'error', reason: 'txn-not-found' };
 
-  update_('Transaction', txn.id, {
-    categoryId: payload.categoryId,
-    status: 'confirmed',
-  });
+  // 단축어는 메뉴에서 고른 글자("☕ 카페")를 그대로 보낸다. id를 몰라도 된다.
+  const categoryId = resolveCategory_(payload.choice || payload.categoryId);
+  if (!categoryId) {
+    return { status: 'error', reason: 'category-not-found', given: payload.choice || payload.categoryId };
+  }
 
-  const suggested = suggestKeyword_(txn.merchantRaw);
-  const scope = payload.scope || suggested.scope;
-  const keyword = payload.keyword || suggested.keyword;
+  update_('Transaction', txn.id, { categoryId: categoryId, status: 'confirmed' });
 
-  const learned = learn_(txn.merchantRaw, payload.categoryId, scope, keyword);
+  const chosen = parseScopeChoice_(payload.scopeChoice, txn.merchantRaw);
+  const scope = payload.scope || chosen.scope;
+  const keyword = payload.keyword || chosen.keyword;
+
+  const learned = learn_(txn.merchantRaw, categoryId, scope, keyword);
 
   // 규칙을 만들었으면 밀려 있던 같은 가게 건들도 함께 정리한다
-  const alsoFixed = applyToPending_(payload.categoryId, learned.scope, learned.keyword);
+  const alsoFixed = applyToPending_(categoryId, learned.scope, learned.keyword);
 
   return {
     status: 'ok',
     txnId: txn.id,
-    categoryId: payload.categoryId,
+    categoryId: categoryId,
     learned: learned,
     alsoFixed: alsoFixed,
+    message: confirmMessage_(categoryId, learned, alsoFixed),
   };
 }
 

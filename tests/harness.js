@@ -67,4 +67,13 @@ function load(files, extraGlobals = {}) {
   return context;
 }
 
-module.exports = { load };
+/**
+ * vm 컨텍스트 안에서 만든 객체는 바깥과 프로토타입이 달라
+ * assert.deepStrictEqual 이 "구조는 같은데 다른 객체"라며 거부한다.
+ * 비교하기 전에 이걸로 평평하게 만든다.
+ */
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+module.exports = { load, plain };

@@ -103,10 +103,14 @@ function materialize_(parsed, rawId, location) {
     suggestions: suggestionsFor_(decision),
   };
 
-  // 미분류면 "앞으로 어디까지 같이 취급할지"도 같이 물어볼 수 있게 후보를 싣는다.
-  // 프랜차이즈는 지점명이 붙어 이름이 매번 달라지므로 범위 선택이 필요하다.
+  // 미분류면 단축어가 그대로 띄울 메뉴를 함께 보낸다.
+  // 단축어는 JSON을 헤집지 않고 "줄바꿈으로 나누기 -> 목록에서 선택" 만 하면 된다.
   if (!txn.categoryId && txn.type === 'expense') {
     response.learnHint = suggestKeyword_(parsed.merchantRaw);
+    response.menuText = categoryMenuText_(decision);
+    response.scopeMenuText = scopeMenuText_(parsed.merchantRaw);
+    response.prompt = (parsed.merchantRaw || '가맹점 미상') + ' ' +
+                      Number(parsed.amount || 0).toLocaleString() + '원';
   }
 
   // 입금이면 열려 있는 더치페이 정산 후보를 함께 돌려준다.

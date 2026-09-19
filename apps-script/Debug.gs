@@ -56,6 +56,22 @@ function checkSetup() {
     problems.push('카테고리가 비어 있습니다 — setup() 을 실행하세요.');
   }
 
+  // 토큰 자체는 찍지 않는다. 모양만 본다.
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('INGEST_TOKEN') || '';
+    const trimmed = raw.trim();
+    Logger.log('토큰 길이 ' + trimmed.length + '자');
+    if (raw !== trimmed) {
+      Logger.log('! 속성 값 앞뒤에 공백이나 줄바꿈이 있습니다 (' + (raw.length - trimmed.length) +
+                 '자). 지금은 떼고 견주므로 동작하지만, 속성에서도 지워 두는 편이 낫습니다.');
+    }
+    if (/[\s&?#%+/]/.test(trimmed)) {
+      Logger.log('! 토큰 가운데에 공백이나 & ? # % + / 가 있습니다. 주소에 붙일 때 깨집니다.');
+    }
+  } catch (e) {
+    problems.push(String(e.message));
+  }
+
   if (problems.length) {
     problems.forEach(function (p) { Logger.log('✗ ' + p); });
   } else {

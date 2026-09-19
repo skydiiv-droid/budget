@@ -6,7 +6,7 @@
  */
 
 function requireToken_(token) {
-  if (token !== getIngestToken_()) throw new Error('unauthorized');
+  if (!tokenMatches_(token)) throw new Error('unauthorized');
 }
 
 function apiLoad(token) {
@@ -225,7 +225,7 @@ function apiChangeToken(token, newToken) {
   if (next.length < 8) throw new Error('8자 이상으로 해 주세요');
   if (/[\s&?#%+/]/.test(next)) throw new Error('공백과 & ? # % + / 는 쓸 수 없어요');
 
-  PropertiesService.getScriptProperties().setProperty('INGEST_TOKEN', next);
+  PropertiesService.getScriptProperties().setProperty('INGEST_TOKEN', next);   // 이미 trim 된 값
   return { status: 'ok' };
 }
 

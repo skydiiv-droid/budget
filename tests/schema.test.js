@@ -61,5 +61,37 @@ check('SCHEMA의 모든 시트에 id나 key 열이 있다', () => {
   assert.deepStrictEqual(bad, [], 'update_ 와 findBy_ 가 행을 찾지 못한다');
 });
 
+console.log('\n토큰');
+
+const { load } = require('./harness');
+
+function tokenCtx(stored) {
+  const box = { INGEST_TOKEN: stored };
+  return load(['Config.gs'], {
+    PropertiesService: { getScriptProperties: () => ({
+      getProperty: (k) => box[k],
+      setProperty: (k, v) => { box[k] = v; },
+    }) },
+  });
+}
+
+check('속성에 딸려 들어간 공백 때문에 막히지 않는다', () => {
+  const ctx = tokenCtx('  bk7Qz2mXr9Lp4vT8w\n');
+  assert.ok(ctx.tokenMatches_('bk7Qz2mXr9Lp4vT8w'), '화면에서 친 값은 앞뒤가 깎여 온다');
+  assert.ok(ctx.tokenMatches_('  bk7Qz2mXr9Lp4vT8w\n'), '단축어는 붙여넣은 그대로 보낸다');
+});
+
+check('틀린 토큰과 빈 토큰은 막는다', () => {
+  const ctx = tokenCtx('bk7Qz2mXr9Lp4vT8w');
+  assert.ok(!ctx.tokenMatches_('다른값'));
+  assert.ok(!ctx.tokenMatches_(''));
+  assert.ok(!ctx.tokenMatches_(null));
+});
+
+check('속성이 공백뿐이면 없는 것으로 본다', () => {
+  const ctx = tokenCtx('   ');
+  assert.throws(() => ctx.getIngestToken_(), /INGEST_TOKEN/);
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed ? 1 : 0);

@@ -22,7 +22,7 @@ function doPost(e) {
     return jsonResponse_({ status: 'error', reason: 'bad-json' });
   }
 
-  if (payload.token !== getIngestToken_()) {
+  if (!tokenMatches_(payload.token)) {
     return jsonResponse_({ status: 'error', reason: 'unauthorized' });
   }
 

@@ -30,10 +30,24 @@ const CONFIG = {
   crossMatchWindowMinutes: 2,
 };
 
+/**
+ * 수집 토큰.
+ *
+ * 앞뒤 공백을 떼고 돌려준다. 속성 칸에 붙여넣을 때 줄바꿈이나 공백이 딸려
+ * 들어가기 쉬운데, 그러면 화면에서 친 값(앞뒤를 떼고 보낸다)과 영영 어긋난다.
+ * 비교하는 쪽마다 따로 떼지 않도록 여기 한 곳에서 다듬는다.
+ */
 function getIngestToken_() {
   const token = PropertiesService.getScriptProperties().getProperty('INGEST_TOKEN');
-  if (!token) throw new Error('스크립트 속성 INGEST_TOKEN이 없습니다.');
-  return token;
+  if (!token || !String(token).trim()) {
+    throw new Error('스크립트 속성 INGEST_TOKEN이 없습니다.');
+  }
+  return String(token).trim();
+}
+
+/** 받은 토큰이 맞는지 본다. 양쪽 다 앞뒤 공백을 떼고 견준다. */
+function tokenMatches_(given) {
+  return String(given || '').trim() === getIngestToken_();
 }
 
 // ===== Util.gs ===================================================
@@ -2797,7 +2811,7 @@ boot();
  */
 
 function requireToken_(token) {
-  if (token !== getIngestToken_()) throw new Error('unauthorized');
+  if (!tokenMatches_(token)) throw new Error('unauthorized');
 }
 
 function apiLoad(token) {
@@ -3016,7 +3030,7 @@ function apiChangeToken(token, newToken) {
   if (next.length < 8) throw new Error('8자 이상으로 해 주세요');
   if (/[\s&?#%+/]/.test(next)) throw new Error('공백과 & ? # % + / 는 쓸 수 없어요');
 
-  PropertiesService.getScriptProperties().setProperty('INGEST_TOKEN', next);
+  PropertiesService.getScriptProperties().setProperty('INGEST_TOKEN', next);   // 이미 trim 된 값
   return { status: 'ok' };
 }
 
@@ -3050,7 +3064,7 @@ function doPost(e) {
     return jsonResponse_({ status: 'error', reason: 'bad-json' });
   }
 
-  if (payload.token !== getIngestToken_()) {
+  if (!tokenMatches_(payload.token)) {
     return jsonResponse_({ status: 'error', reason: 'unauthorized' });
   }
 
@@ -3232,6 +3246,22 @@ function checkSetup() {
 
   if (!readAll_('Category').length) {
     problems.push('카테고리가 비어 있습니다 — setup() 을 실행하세요.');
+  }
+
+  // 토큰 자체는 찍지 않는다. 모양만 본다.
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('INGEST_TOKEN') || '';
+    const trimmed = raw.trim();
+    Logger.log('토큰 길이 ' + trimmed.length + '자');
+    if (raw !== trimmed) {
+      Logger.log('! 속성 값 앞뒤에 공백이나 줄바꿈이 있습니다 (' + (raw.length - trimmed.length) +
+                 '자). 지금은 떼고 견주므로 동작하지만, 속성에서도 지워 두는 편이 낫습니다.');
+    }
+    if (/[\s&?#%+/]/.test(trimmed)) {
+      Logger.log('! 토큰 가운데에 공백이나 & ? # % + / 가 있습니다. 주소에 붙일 때 깨집니다.');
+    }
+  } catch (e) {
+    problems.push(String(e.message));
   }
 
   if (problems.length) {

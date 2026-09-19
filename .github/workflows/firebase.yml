@@ -30,7 +30,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # 순수 로직은 한 곳(shared/)에만 둔다. 함수도 화면도 그 복사본을 쓴다.
       # Firebase는 functions/ 밖의 파일을 올려 주지 않고, 브라우저는 상위

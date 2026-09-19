@@ -27,8 +27,13 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
 
 let db, auth, uid, projectId, D = null;
 
-/** 단축어가 두드릴 주소. 웹 화면 주소와 다르다. */
-const ingestUrl = () => `https://asia-northeast3-${projectId}.cloudfunctions.net/ingest`;
+/**
+ * 단축어가 두드릴 주소.
+ *
+ * 2세대 함수는 Cloud Run 주소를 받으므로 프로젝트 이름만으로 만들어 낼 수 없다.
+ * 배포 로그나 Functions 콘솔에 찍힌 실제 주소를 한 번 저장해 두고 쓴다.
+ */
+const ingestUrl = () => D?.ingest?.url || '';
 
 function toast(msg) {
   const el = document.createElement('div');
@@ -144,7 +149,10 @@ async function refresh() {
     ]);
 
   const settings = settingsSnap.exists() ? settingsSnap.data() : { ...SETTINGS };
-  D = { categories, rules, merchants, accounts, debts, recurring, settlements, txns, raw, settings };
+  const ingestSnap = await getDoc(doc(db, 'config/ingest')).catch(() => null);
+  const ingest = ingestSnap?.exists() ? ingestSnap.data() : {};
+  D = { categories, rules, merchants, accounts, debts, recurring, settlements,
+        txns, raw, settings, ingest };
   D.ledger = ledger({ transactions: txns, recurring, settlements, accounts, debts, raw, settings });
 
   $('boot').hidden = true;
@@ -482,15 +490,19 @@ function renderSetup() {
         <option value="cash">현금</option></select></div></div>
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
 
-  h += `<div class="card">
+  h += `<form class="card" data-form="ingestUrl">
     <div class="lbl" style="margin-bottom:6px">단축어가 두드릴 주소</div>
     <div class="muted" style="margin-bottom:10px">이 화면 주소와 다릅니다.
-    단축어의 <b>URL 콘텐츠 가져오기</b> 에 이걸 넣으세요.</div>
-    <div class="raw" style="margin-bottom:10px">${esc(ingestUrl())}</div>
+    Functions 콘솔의 <b>ingest</b> 트리거 주소를 한 번 넣어 두세요
+    (<code>https://ingest-…-du.a.run.app</code> 꼴).</div>
+    <div class="field"><label>주소</label>
+      <input name="url" inputmode="url" placeholder="https://ingest-xxxx-du.a.run.app"
+        value="${esc(ingestUrl())}"></div>
     <div style="display:flex;gap:7px">
-      <button type="button" class="act ghost" id="copyUrl" style="flex:1">주소 복사</button>
-      <button type="button" class="act primary" id="pingIngest" style="flex:1">연결 확인</button>
-    </div></div>`;
+      <button type="submit" class="act ghost" style="flex:1">저장</button>
+      <button type="button" class="act primary" id="pingIngest" style="flex:1"
+        ${ingestUrl() ? '' : 'disabled'}>연결 확인</button>
+    </div></form>`;
 
   h += `<form class="card" data-form="token">
     <div class="lbl" style="margin-bottom:6px">단축어 토큰</div>
@@ -623,6 +635,7 @@ async function saveDoc(kind, values) {
  * 주소가 살아 있다는 뜻이다. 주소를 손으로 옮겨 적기 전에 확인하는 게 낫다.
  */
 async function pingIngest() {
+  if (!ingestUrl()) return toast('주소를 먼저 저장해 주세요');
   toast('두드려 보는 중…');
   try {
     const res = await fetch(ingestUrl(), {
@@ -675,16 +688,6 @@ document.addEventListener('click', async (e) => {
     return toast('지웠어요');
   }
 
-  if (e.target.id === 'copyUrl') {
-    try {
-      await navigator.clipboard.writeText(ingestUrl());
-      return toast('주소를 복사했어요');
-    } catch {
-      window.prompt('복사하세요', ingestUrl());
-      return;
-    }
-  }
-
   if (e.target.id === 'pingIngest') return pingIngest();
 
   if (e.target.id === 'refresh') { await refresh(); return toast('새로 불러왔어요'); }
@@ -721,11 +724,19 @@ document.addEventListener('submit', async (e) => {
     return toast('넣었어요');
   }
 
+  if (form.dataset.form === 'ingestUrl') {
+    const url = values.url.trim();
+    if (url && !/^https:\/\//.test(url)) return toast('https:// 로 시작해야 해요');
+    await setDoc(doc(db, 'config/ingest'), { url }, { merge: true });
+    await refresh();
+    return toast('저장했어요');
+  }
+
   if (form.dataset.form === 'token') {
     const token = values.token.trim();
     if (token.length < 8) return toast('8자 이상으로 해 주세요');
     if (/[\s&?#%+/]/.test(token)) return toast('공백과 & ? # % + / 는 쓸 수 없어요');
-    await setDoc(doc(db, 'config/ingest'), { token });
+    await setDoc(doc(db, 'config/ingest'), { token }, { merge: true });
     form.reset();
     return toast('저장했어요 — 단축어의 token 도 고쳐 주세요');
   }

@@ -4,6 +4,6 @@
   "description": "현대카드/우리은행 문자 기반 자동 가계부",
   "scripts": {
     "build": "node build.js",
-    "test": "node tests/parser.test.js && node tests/logic.test.js"
+    "test": "node tests/schema.test.js && node tests/parser.test.js && node tests/logic.test.js"
   }
 }

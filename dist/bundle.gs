@@ -152,6 +152,12 @@ const SCHEMA = {
   Anchor: ['id', 'at', 'accountId', 'kind', 'reported', 'computed', 'diff',
            'status', 'rawMessageId'],
 
+  // 매달 나가는 돈. 구독·통신비·보험료.
+  // 실제 결제도 카드 문자로 들어오므로, 집계할 때 둘을 겹쳐 세지 않도록
+  // Ledger가 가맹점 이름으로 짝을 지어 변동지출에서 뺀다.
+  RecurringRule: ['id', 'name', 'expectedAmount', 'dayOfMonth',
+                  'accountId', 'categoryId', 'autoDetected', 'lastMatchedTxnId'],
+
   // 빚. 이자율이 높은 것부터 갚아야 총 이자가 가장 적다.
   Debt: ['id', 'name', 'kind', 'balance', 'rate', 'billingDay', 'note', 'sortOrder'],
 

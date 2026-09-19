@@ -69,6 +69,8 @@ jobs:
           echo "이 계정에 역할을 줘야 합니다:"
           echo "https://console.cloud.google.com/iam-admin/iam?project=budget-13aec"
 
+      # 이 계정이 프로젝트를 보기는 하는지. 목록에 budget-13aec 가 없으면
+      # 권한이 아니라 키 자체가 다른 프로젝트의 것이다.
       - name: 프로젝트에 닿는지
         continue-on-error: true
         run: npx --yes firebase-tools@13 projects:list
@@ -83,9 +85,12 @@ jobs:
         working-directory: firebase
         run: npx --yes firebase-tools@13 deploy --only hosting --non-interactive
 
+      # --debug 를 붙이면 구글이 돌려준 본문이 그대로 나온다.
+      # "Permission 'firebaserules.releases.update' denied" 처럼
+      # 어떤 권한이 없는지 이름이 찍힌다. 그게 없으면 계속 추측하게 된다.
       - name: 보안 규칙 올리기 (Firestore)
         working-directory: firebase
-        run: npx --yes firebase-tools@13 deploy --only firestore --non-interactive
+        run: npx --yes firebase-tools@13 deploy --only firestore --non-interactive --debug
 
       - name: 수집 함수 올리기 (Functions)
         working-directory: firebase

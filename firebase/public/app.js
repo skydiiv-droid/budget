@@ -39,6 +39,12 @@ let editTxn = null;
 const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
 
 /**
+ * 설정에서 펼쳐 둔 칸. 새로 열면 다 접혀 있다 — 한 번 정해 놓고 잘 안 보는
+ * 것들이니까. 다만 고치는 중에 저장해서 화면을 다시 그릴 때 접히면 안 된다.
+ */
+const openFold = new Set();
+
+/**
  * 단축어가 두드릴 주소.
  *
  * 2세대 함수는 Cloud Run 주소를 받으므로 프로젝트 이름만으로 만들어 낼 수 없다.
@@ -162,8 +168,16 @@ async function syncCategories() {
   const meta = await getDoc(metaRef);
   if (meta.exists() && Number(meta.data().catVersion || 0) >= CAT_VERSION) return;
 
+  // 내가 고치거나 지운 칸까지 되돌려 놓으면 고친 의미가 없다.
+  const removed = new Set(meta.data()?.removedCategories || []);
+  const edited = new Set((await readAll('categories'))
+    .filter((c) => c.userEdited).map((c) => c.id));
+
   const batch = writeBatch(db);
-  for (const c of categoryDocs()) batch.set(doc(col('categories'), c.id), c, { merge: true });
+  for (const c of categoryDocs()) {
+    if (removed.has(c.id) || edited.has(c.id)) continue;
+    batch.set(doc(col('categories'), c.id), c, { merge: true });
+  }
   batch.set(metaRef, { catVersion: CAT_VERSION }, { merge: true });
   await batch.commit();
 }
@@ -209,7 +223,9 @@ function render() {
   renderSetup();
 }
 
-const byOrder = (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+// 미분류는 늘 맨 뒤다. 새로 만든 갈래가 그 뒤로 가면 어색하다.
+const last = (c) => (c.id === 'cat_unknown' ? 1 : 0);
+const byOrder = (a, b) => last(a) - last(b) || (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
 const expenseCats = () => D.categories
   .filter((c) => c.kind === 'expense' && !c.hidden).sort(byOrder);
 const mainCats = () => expenseCats().filter((c) => !c.parentId);
@@ -529,9 +545,7 @@ function renderRules() {
       <select class="cat-sel" data-recat="${x.kind}:${x.id}">${catOptions(x.cat)}</select>
       <button type="button" class="act danger" data-del="${x.kind}:${x.id}">삭제</button></span></div>`;
 
-  let h = `<div class="card">
-    <div class="lbl" style="margin-bottom:6px">자동 분류 규칙</div>
-    <div class="muted" style="margin-bottom:12px">문자가 오면 이 목록을 훑어 카테고리를 정해요.
+  let h = `<div class="muted" style="margin-bottom:12px">문자가 오면 이 목록을 훑어 카테고리를 정해요.
       <b>내가 정한 것</b>을 먼저 보고, 거기 없으면 기본 규칙을 봅니다.
       잘못 정해지는 게 있으면 여기서 바꾸거나 지우세요.</div>
     <input id="ruleFilter" placeholder="가게 이름으로 찾기" autocomplete="off">
@@ -540,7 +554,7 @@ function renderRules() {
   h += mine.length ? mine.map(row).join('')
     : `<div class="empty">아직 없어요.<br>정리 화면이나 내역에서 카테고리를 고르면<br>여기에 쌓입니다.</div>`;
 
-  h += `<details style="margin-top:8px">
+  h += `<details class="mini" style="margin-top:8px">
     <summary>처음부터 들어 있던 규칙 ${builtin.length}개</summary>
     ${builtin.map(row).join('')}
     <div class="lbl" style="margin:16px 0 0">이름을 못 믿는 곳 · ${pass.length}개</div>
@@ -550,7 +564,7 @@ function renderRules() {
       <span class="grow" style="font-size:13px;font-weight:600">${esc(m.displayName || m.normalizedName)}</span>
       <span class="acts"><button type="button" class="act danger"
         data-del="merchants:${m.id}">삭제</button></span></div>`).join('')}
-  </details></div>`;
+  </details>`;
   return h;
 }
 
@@ -736,8 +750,13 @@ const ASSET_LABEL = { checking: '입출금', savings: '저축 · 투자', cash: 
 
 function renderSetup() {
   const s = D.settings;
-  let h = `<form class="card" data-form="settings">
-    <div class="lbl" style="margin-bottom:12px">수입과 예산</div>
+  const assets = D.accounts.filter((a) => a.type !== 'card');
+  const assetTotal = assets.reduce((sum, a) => sum + Number(a.balance || 0), 0);
+  const debtTotal = D.debts.reduce((sum, d) => sum + Number(d.balance || 0), 0);
+  const mine = D.merchants.filter((m) => m.defaultCategoryId && !m.isPassthrough && !m.alwaysAsk).length
+             + D.rules.filter((r) => r.source === 'learned').length;
+
+  const income = `<form data-form="settings">
     <div class="field"><label>매달 들어오는 돈</label>
       <input name="monthlyIncome" inputmode="numeric" value="${won(s.monthlyIncome)}"></div>
     <div class="field"><label>생활비 예산</label>
@@ -752,11 +771,11 @@ function renderSetup() {
     <div class="muted" style="margin:-4px 0 12px">얼마나 갚았는지를 이 금액에 견줘 보여줍니다. 비우면 지금 잔액이 기준이 돼요.</div>
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
 
-  h += '<div class="card"><div class="lbl" style="margin-bottom:6px">빚</div>';
-  if (!D.debts.length) h += '<div class="empty">아직 없어요.</div>';
+  let debts = '';
+  if (!D.debts.length) debts += '<div class="empty">아직 없어요.</div>';
   else {
     for (const d of [...D.debts].sort((a, b) => Number(b.rate || 0) - Number(a.rate || 0))) {
-      h += `<div class="item"><span class="grow">
+      debts += `<div class="item"><span class="grow">
         <span style="font-size:13.5px;font-weight:600">${esc(d.name)}</span><br>
         <span class="muted">연 ${Number(d.rate) || 0}%${d.billingDay ? ` · 매월 ${d.billingDay}일` : ''}</span></span>
         <span class="num" style="font-size:14px;font-weight:600">${won(d.balance)}</span>
@@ -765,11 +784,9 @@ function renderSetup() {
           <button type="button" class="act danger" data-del="debts:${d.id}">삭제</button></span></div>`;
     }
   }
-  h += '</div>';
-
-  h += `<form class="card" data-form="debts">
-    <div class="lbl" style="margin-bottom:6px">빚 넣기</div>
-    <div class="muted" style="margin-bottom:12px">이미 넣은 빚은 위에서 <b>고치기</b> 를 누르면 여기로 불러와요.</div>
+  debts += `<form data-form="debts" style="margin-top:14px">
+    <div class="hr"></div>
+    <div class="muted" style="margin-bottom:12px">위에서 <b>고치기</b> 를 누르면 여기로 불러와요.</div>
     <input type="hidden" name="id">
     <div class="field"><label>이름</label><input name="name" placeholder="리볼빙" required></div>
     <div class="fields">
@@ -779,13 +796,11 @@ function renderSetup() {
     <button type="submit" class="act primary" style="width:100%">저장</button>
     <div class="muted" style="margin-top:10px">이자율을 넣으면 홈에서 비싼 빚부터 갚으라고 알려줘요.</div></form>`;
 
-  const assets = D.accounts.filter((a) => a.type !== 'card');
-  h += `<div class="card"><div class="lbl" style="margin-bottom:6px">가진 돈</div>
-    <div class="muted" style="margin-bottom:10px">통장 잔고는 입출금 문자가 올 때마다 알아서 맞춰져요. 적금·청약처럼 문자가 안 오는 건 직접 넣어 주세요.</div>`;
-  if (!assets.length) h += '<div class="empty">아직 없어요.</div>';
+  let money = `<div class="muted" style="margin-bottom:10px">통장 잔고는 입출금 문자가 올 때마다 알아서 맞춰져요. 적금·청약처럼 문자가 안 오는 건 직접 넣어 주세요.</div>`;
+  if (!assets.length) money += '<div class="empty">아직 없어요.</div>';
   else {
     for (const a of assets) {
-      h += `<div class="item"><span class="grow">
+      money += `<div class="item"><span class="grow">
         <span style="font-size:13.5px;font-weight:600">${esc(a.name)}</span><br>
         <span class="muted">${esc(ASSET_LABEL[a.type] || a.type)}</span></span>
         <span class="num" style="font-size:14px;font-weight:600">${won(a.balance)}</span>
@@ -794,10 +809,8 @@ function renderSetup() {
           <button type="button" class="act danger" data-del="accounts:${a.id}">삭제</button></span></div>`;
     }
   }
-  h += '</div>';
-
-  h += `<form class="card" data-form="accounts">
-    <div class="lbl" style="margin-bottom:12px">가진 돈 넣기</div>
+  money += `<form data-form="accounts" style="margin-top:14px">
+    <div class="hr"></div>
     <input type="hidden" name="id">
     <div class="field"><label>이름</label><input name="name" placeholder="우리은행 · 청약 · 적금" required></div>
     <div class="fields">
@@ -807,10 +820,7 @@ function renderSetup() {
         <option value="cash">현금</option></select></div></div>
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
 
-  h += renderRules();
-
-  h += `<form class="card" data-form="ingestUrl">
-    <div class="lbl" style="margin-bottom:6px">문자 받는 주소</div>
+  const ingest = `<form data-form="ingestUrl">
     <div class="muted" style="margin-bottom:10px">이 화면 주소와 달라요. 아이폰 단축어가 문자를 보낼 곳입니다. 바뀌었을 때만 고치면 돼요.</div>
     <div class="field"><label>주소</label>
       <input name="url" inputmode="url" placeholder="https://ingest-xxxx-du.a.run.app"
@@ -818,23 +828,105 @@ function renderSetup() {
     <div style="display:flex;gap:7px">
       <button type="submit" class="act ghost" style="flex:1">저장</button>
       <button type="button" class="act primary" id="pingIngest" style="flex:1">연결 확인</button>
-    </div></form>`;
+    </div></form>
+    <div class="hr"></div>
+    <form data-form="token">
+      <div class="muted" style="margin-bottom:12px">아이폰 단축어는 새벽에 주머니 속에서 혼자 돌아 로그인을 할 수 없어요. 그래서 미리 정해 둔 비밀번호로 들어옵니다. 이걸로는 <b>문자를 넣는 것만</b> 되고 가계부를 읽지는 못해요.</div>
+      <div class="field"><label>연결 비밀번호</label>
+        <input name="token" type="password" autocomplete="new-password" placeholder="8자 이상" required></div>
+      <button type="submit" class="act primary" style="width:100%">비밀번호 저장</button>
+      <div class="note warn" style="margin:12px 0 0">바꾸면 아이폰 <b>단축어의 token 칸도</b> 같이 고쳐야 문자가 계속 들어와요.</div></form>`;
 
-  h += `<form class="card" data-form="token">
-    <div class="lbl" style="margin-bottom:6px">문자 연결 비밀번호</div>
-    <div class="muted" style="margin-bottom:12px">아이폰 단축어는 새벽에 주머니 속에서 혼자 돌아 로그인을 할 수 없어요. 그래서 미리 정해 둔 비밀번호로 들어옵니다. 이걸로는 <b>문자를 넣는 것만</b> 되고 가계부를 읽지는 못해요.</div>
-    <div class="field"><label>비밀번호</label>
-      <input name="token" type="password" autocomplete="new-password" placeholder="8자 이상" required></div>
-    <button type="submit" class="act primary" style="width:100%">저장</button>
-    <div class="note warn" style="margin:12px 0 0">바꾸면 아이폰 <b>단축어의 token 칸도</b> 같이 고쳐야 문자가 계속 들어와요.</div></form>`;
-
-  h += `<div class="card"><div class="lbl" style="margin-bottom:10px">그 밖에</div>
-    <div style="display:flex;gap:7px">
+  const etc = `<div style="display:flex;gap:7px">
       <a class="act ghost" href="/data" style="flex:1;text-align:center;text-decoration:none;line-height:22px">원본 데이터</a>
       <button type="button" class="act ghost" id="signout" style="flex:1">로그아웃</button>
-    </div></div>`;
+    </div>`;
 
-  $('setup').innerHTML = h;
+  const cats = expenseCats();
+  $('setup').innerHTML = [
+    fold('income', '수입과 예산',
+      s.monthlyIncome ? `들어옴 ${won(s.monthlyIncome)} · 생활비 ${won(s.variableBudget)}` : '아직 안 넣음', income),
+    fold('debts', '빚',
+      D.debts.length ? `${D.debts.length}개 · ${won(debtTotal)}` : '없음', debts),
+    fold('assets', '가진 돈',
+      assets.length ? `${assets.length}개 · ${won(assetTotal)}` : '없음', money),
+    fold('cats', '카테고리',
+      `큰 갈래 ${cats.filter((c) => !c.parentId).length} · 하위 ${cats.filter((c) => c.parentId).length}`,
+      renderCategories()),
+    fold('rules', '자동 분류 규칙',
+      `내가 정한 것 ${mine}개`, renderRules()),
+    fold('ingest', '문자 연결', '단축어가 문자를 보내는 곳', ingest),
+    fold('etc', '그 밖에', '', etc),
+  ].join('');
+}
+
+/**
+ * 설정은 한 번 정해 놓고 잘 안 건드리는 것들이다. 다 펼쳐 두면 스크롤만 길어지고
+ * 정작 찾는 게 어디 있는지 안 보인다. 접어 두되, 접힌 채로도 지금 값이 보이게 한다.
+ */
+function fold(key, title, summary, body) {
+  return `<details class="fold" data-fold="${key}" ${openFold.has(key) ? 'open' : ''}>
+    <summary><span class="fold-t">${esc(title)}</span>
+      <span class="fold-s">${esc(summary)}</span><span class="fold-x"></span></summary>
+    <div class="fold-b">${body}</div></details>`;
+}
+
+const KIND_LABEL = { expense: '지출', income: '수입', transfer: '옮김' };
+
+/**
+ * 카테고리를 직접 만들고 고치고 지운다.
+ *
+ * 내가 정해 준 열 갈래가 이 사람 삶과 딱 맞을 리가 없다. 안 쓰는 칸은 지우고
+ * 필요한 칸은 만들 수 있어야 한다. 두 단계까지만 허용한다 — 세 단계가 되면
+ * 고르는 데 드는 품이 분류해서 얻는 것보다 커진다.
+ */
+function renderCategories() {
+  const all = [...D.categories].filter((c) => !c.hidden).sort(byOrder);
+  const row = (c, depth) => {
+    const used = D.txns.filter((t) => t.categoryId === c.id).length;
+    return `<div class="item" style="padding-left:${depth * 20}px">
+      <span class="grow"><span style="font-size:13.5px;font-weight:${depth ? 500 : 600}">
+        ${esc(c.icon || '')} ${esc(c.name)}</span><br>
+        <span class="muted">${used ? `${used}건` : '아직 안 쓰임'}${c.id === 'cat_unknown' ? ' · 갈 데 없는 결제가 여기로' : ''}</span></span>
+      <span class="acts">
+        <button type="button" class="act ghost small" data-editcat="${c.id}">고치기</button>
+        ${c.id === 'cat_unknown' ? ''
+          : `<button type="button" class="act danger" data-delcat="${c.id}">삭제</button>`}</span></div>`;
+  };
+
+  let h = `<div class="muted" style="margin-bottom:10px">안 쓰는 칸은 지우고, 필요한 칸은 만드세요.
+    지워도 그 칸을 쓰던 결제는 사라지지 않고 위 갈래로 올라갑니다.</div>`;
+
+  for (const kind of ['expense', 'income', 'transfer']) {
+    const group = all.filter((c) => c.kind === kind);
+    if (!group.length) continue;
+    h += `<div class="lbl" style="margin:14px 0 0">${KIND_LABEL[kind]}</div>`;
+    for (const c of group.filter((x) => !x.parentId)) {
+      h += row(c, 0);
+      for (const kid of group.filter((x) => x.parentId === c.id)) h += row(kid, 1);
+    }
+  }
+
+  h += `<form data-form="categories" style="margin-top:16px">
+    <div class="hr"></div>
+    <div class="lbl" style="margin-bottom:10px">카테고리 넣기</div>
+    <input type="hidden" name="id">
+    <div class="fields">
+      <div class="field" style="flex:3"><label>이름</label>
+        <input name="name" placeholder="반려동물" required></div>
+      <div class="field" style="flex:1"><label>아이콘</label>
+        <input name="icon" placeholder="🐾" maxlength="4" style="text-align:center"></div></div>
+    <div class="field"><label>어디에 들어갈까</label>
+      <select name="parentId"><option value="">큰 갈래로 (맨 위에)</option>
+        ${mainCats().map((c) => `<option value="${c.id}">${esc(c.name)} 아래로</option>`).join('')}
+      </select></div>
+    <div class="field"><label>무엇으로 세나</label>
+      <select name="catKind">
+        <option value="expense">지출</option>
+        <option value="income">수입</option>
+        <option value="transfer">옮김 (카드값·저축처럼 쓴 게 아닌 것)</option></select></div>
+    <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
+  return h;
 }
 
 // ───────────────────────────────────────────────── 고치기
@@ -910,6 +1002,74 @@ function parseScope(text, merchantRaw) {
   return { scope: 'once', keyword: '' };
 }
 
+/** 같은 갈래 안에서 맨 뒤 자리. 판올림이 쓰는 900번대는 건드리지 않는다. */
+function nextOrder(parentId) {
+  const kin = D.categories.filter((c) => (c.parentId || '') === parentId && !c.hidden);
+  return Math.min(880, Math.max(0, ...kin.map((c) => Number(c.sortOrder) || 0)) + 1);
+}
+
+/** Firestore 배치는 한 번에 500개까지다. 넘으면 나눠 보낸다. */
+async function commitAll(ops) {
+  for (let i = 0; i < ops.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const op of ops.slice(i, i + 400)) op(batch);
+    await batch.commit();
+  }
+}
+
+/**
+ * 카테고리를 지운다.
+ *
+ * 지운다고 그 칸을 쓰던 결제까지 사라지면 안 된다 — 지난달 쓴 돈이 통째로
+ * 없어진다. 위 갈래로 올려 보내고, 올라갈 데가 없으면 미분류로 보낸다.
+ */
+async function deleteCategory(id) {
+  const cat = D.categories.find((c) => c.id === id);
+  if (!cat) return;
+  if (id === 'cat_unknown') return toast('미분류는 못 지워요 — 갈 데 없는 결제가 여기로 와요');
+
+  const kids = D.categories.filter((c) => c.parentId === id && !c.hidden);
+  if (kids.length) return toast(`하위 ${kids.length}개를 먼저 옮기거나 지워 주세요`);
+
+  const to = cat.parentId && D.categories.some((c) => c.id === cat.parentId)
+    ? cat.parentId : 'cat_unknown';
+
+  const txns = D.txns.filter((t) => t.categoryId === id);
+  const rules = D.rules.filter((r) => r.categoryId === id);
+  const shops = D.merchants.filter((m) => m.defaultCategoryId === id);
+  const fixed = D.recurring.filter((r) => r.categoryId === id);
+  const moves = [
+    ...txns.map((t) => (b) => b.update(doc(col('txns'), t.id), { categoryId: to })),
+    ...rules.map((r) => (b) => b.update(doc(col('rules'), r.id), { categoryId: to })),
+    ...shops.map((m) => (b) => b.update(doc(col('merchants'), m.id), { defaultCategoryId: to })),
+    ...fixed.map((r) => (b) => b.update(doc(col('recurring'), r.id), { categoryId: to })),
+  ];
+
+  // "16건" 은 무엇 16건인지 알 수 없다. 결제가 옮겨지는 것과 규칙이 옮겨지는 건
+  // 무게가 다르므로 나눠서 말한다.
+  const parts = [
+    txns.length && `결제 ${txns.length}건`,
+    rules.length && `자동 분류 규칙 ${rules.length}개`,
+    shops.length && `가게 규칙 ${shops.length}개`,
+    fixed.length && `고정비 ${fixed.length}개`,
+  ].filter(Boolean);
+
+  const msg = parts.length
+    ? `「${cat.name}」 을(를) 쓰던 ${parts.join(', ')}가 「${catName(to)}」(으)로 옮겨집니다.\n\n지울까요?`
+    : `「${cat.name}」 을(를) 지울까요?`;
+  if (!confirm(msg)) return;
+
+  await commitAll([
+    ...moves,
+    (b) => b.delete(doc(col('categories'), id)),
+    // 판올림 때 되살아나지 않게 지웠다는 사실을 남긴다
+    (b) => b.set(doc(db, 'users', uid, 'meta', 'settings'),
+      { removedCategories: [...(D.settings.removedCategories || []), id] }, { merge: true }),
+  ]);
+  await refresh();
+  toast(moves.length ? `지웠어요 — ${parts.join(', ')}는 ${catName(to)}(으)로` : '지웠어요');
+}
+
 async function saveDoc(kind, values) {
   const name = values.name?.trim();
   if (kind !== 'settings' && !name) return toast('이름을 적어 주세요');
@@ -939,6 +1099,27 @@ async function saveDoc(kind, values) {
       balance: parseAmount(values.balance) || 0,
       balanceAt: new Date().toISOString(), active: true,
     }, { merge: true });
+  } else if (kind === 'categories') {
+    const parentId = values.parentId || '';
+    const me = D.categories.find((c) => c.id === values.id);
+    const parent = D.categories.find((c) => c.id === parentId);
+    // 두 단계까지만. 세 단계가 되면 고르는 품이 분류해서 얻는 것보다 커진다.
+    if (parent?.parentId) return toast('하위의 하위는 만들 수 없어요');
+    if (me && parentId === me.id) return toast('자기 자신 아래로는 못 넣어요');
+    if (me && parentId && D.categories.some((c) => c.parentId === me.id && !c.hidden)) {
+      return toast('하위가 있는 갈래는 다른 갈래 밑으로 옮길 수 없어요');
+    }
+    const ref = me ? doc(col('categories'), me.id)
+                   : doc(col('categories'), `cat_u_${Date.now().toString(36)}`);
+    await setDoc(ref, {
+      id: ref.id, name, parentId,
+      kind: values.catKind || me?.kind || 'expense',
+      icon: String(values.icon || '').trim().slice(0, 4),
+      sortOrder: me?.sortOrder ?? nextOrder(parentId),
+      hidden: false,
+      userEdited: true,          // 다음 판올림 때 덮어쓰지 않는다
+    }, { merge: true });
+
   } else if (kind === 'recurring') {
     const existing = D.recurring.find((r) => r.id === values.id);
     const ref = existing ? doc(col('recurring'), existing.id) : doc(col('recurring'));
@@ -1060,6 +1241,23 @@ document.addEventListener('click', guard(async (e) => {
     return toast('치웠어요');
   }
 
+  const delcat = e.target.closest('[data-delcat]');
+  if (delcat) return deleteCategory(delcat.dataset.delcat);
+
+  const editcat = e.target.closest('[data-editcat]');
+  if (editcat) {
+    const c = D.categories.find((x) => x.id === editcat.dataset.editcat);
+    const form = document.querySelector('[data-form="categories"]');
+    if (!c || !form) return;
+    form.elements.id.value = c.id;
+    form.elements.name.value = c.name;
+    form.elements.icon.value = c.icon || '';
+    form.elements.parentId.value = c.parentId || '';
+    form.elements.catKind.value = c.kind || 'expense';
+    form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return toast(`${c.name} 을(를) 불러왔어요 — 고치고 저장하세요`);
+  }
+
   const edit = e.target.closest('[data-edit]');
   if (edit) {
     const [kind, id] = edit.dataset.edit.split(':');
@@ -1094,6 +1292,12 @@ document.addEventListener('click', guard(async (e) => {
 }));
 
 
+
+document.addEventListener('toggle', (e) => {
+  const key = e.target?.dataset?.fold;
+  if (!key) return;
+  if (e.target.open) openFold.add(key); else openFold.delete(key);
+}, true);
 
 document.addEventListener('change', guard(async (e) => {
   // 범위를 바꾸면 몇 건이 딸려 오는지도 달라진다. 다시 그리면 고른 값이 날아가므로 숫자만 고친다.

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="가계부">
+  <!-- 홈 화면에서는 40px 남짓으로 줄어든다. 거기서 안 뭉개지는 게 전부라
+       획을 좁히고 가로획을 벌렸다. 가운데 봉우리를 올려 V 둘이 갈리게 했다. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2=".85" y2="1">
+      <stop offset="0" stop-color="#4A90F5"/>
+      <stop offset=".52" stop-color="#1D6FE0"/>
+      <stop offset="1" stop-color="#0E479C"/>
+    </linearGradient>
+    <radialGradient id="s" cx=".28" cy=".16" r=".82">
+      <stop offset="0" stop-color="#fff" stop-opacity=".30"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="d" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#062E6B" flood-opacity=".34"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#g)"/>
+  <rect width="1024" height="1024" fill="url(#s)"/>
+  <g filter="url(#d)">
+    <path d="M330 330 L424 694 L512 420 L600 694 L694 330" fill="none" stroke="#fff"
+      stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="268" y="436" width="488" height="50" rx="25" fill="#fff"/>
+    <rect x="268" y="560" width="488" height="50" rx="25" fill="#fff"/>
+  </g>
+</svg>

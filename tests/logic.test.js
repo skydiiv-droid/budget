@@ -411,8 +411,10 @@ check('이미 쓰던 시트에 빠진 카테고리만 더한다', () => {
   const store = createStore({
     Category: [{ id: 'cat_cafe', name: '카페' }],   // 예전 시트에 이미 있던 것
   });
+  // ensureSheets_ 는 Schema.gs에 있고 SpreadsheetApp을 쓴다.
+  // 메모리 저장소에는 만들 시트가 없으므로 비워 둔다.
   const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Seed.gs'],
-                   { ...store, Logger: { log() {} } });
+                   { ...store, Logger: { log() {} }, ensureSheets_: () => 0 });
   const added = ctx.resync();
 
   const ids = store.readAll_('Category').map((c) => c.id);
@@ -427,7 +429,7 @@ check('직접 만든 규칙은 건드리지 않는다', () => {
              categoryId: 'cat_hobby', source: 'learned' }],
   });
   const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Seed.gs'],
-                   { ...store, Logger: { log() {} } });
+                   { ...store, Logger: { log() {} }, ensureSheets_: () => 0 });
   ctx.resync();
 
   const mine = store.readAll_('Rule').filter((r) => r.source === 'learned');
@@ -438,7 +440,7 @@ check('직접 만든 규칙은 건드리지 않는다', () => {
 check('여러 번 실행해도 늘어나지 않는다', () => {
   const store = createStore({});
   const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Seed.gs'],
-                   { ...store, Logger: { log() {} } });
+                   { ...store, Logger: { log() {} }, ensureSheets_: () => 0 });
   ctx.resync();
   const after1 = store.readAll_('Rule').length;
   ctx.resync();

@@ -226,7 +226,7 @@ function seedMerchants_() {
  * 있는 것은 건드리지 않고 없는 것만 더한다. 여러 번 실행해도 안전하다.
  */
 function resync() {
-  const added = { categories: 0, accounts: 0, rules: 0, merchants: 0 };
+  const added = { sheets: ensureSheets_(), categories: 0, accounts: 0, rules: 0, merchants: 0 };
 
   const haveCategory = {};
   readAll_('Category').forEach(function (c) { haveCategory[c.id] = true; });
@@ -280,7 +280,7 @@ function resync() {
     added.merchants++;
   });
 
-  Logger.log('카테고리 ' + added.categories + '개 · 계정 ' + added.accounts +
+  Logger.log('시트 ' + added.sheets + '개 · 카테고리 ' + added.categories + '개 · 계정 ' + added.accounts +
              '개 · 기본 규칙 ' + added.rules + '개 · 간편결제 ' + added.merchants +
              '개를 더했습니다.');
   return added;

@@ -158,16 +158,29 @@ const SCHEMA = {
   Settings: ['key', 'value'],
 };
 
-function setup() {
+/**
+ * 없는 시트를 만든다. 있는 시트는 건드리지 않는다.
+ *
+ * 스키마에 시트가 새로 생기면(Debt 처럼) 기존 사용자에게는 그 시트가 없다.
+ * setup() 과 resync() 가 둘 다 이걸 먼저 부르므로, 어느 쪽을 실행하든
+ * 시트가 없어서 실패하는 일은 없다.
+ */
+function ensureSheets_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let made = 0;
   Object.keys(SCHEMA).forEach(function (name) {
-    let sheet = ss.getSheetByName(name);
-    if (sheet) return;
-    sheet = ss.insertSheet(name);
+    if (ss.getSheetByName(name)) return;
+    const sheet = ss.insertSheet(name);
     const headers = SCHEMA[name];
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sheet.setFrozenRows(1);
+    made++;
   });
+  return made;
+}
+
+function setup() {
+  ensureSheets_();
   seedCategories_();
   seedAccounts_();
   seedRules_();
@@ -177,9 +190,18 @@ function setup() {
 }
 
 function sheet_(name) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
-  if (!sheet) throw new Error('시트 없음: ' + name + ' — setup()을 먼저 실행하세요.');
-  return sheet;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(name);
+  if (sheet) return sheet;
+
+  // 스키마에 있는 시트인데 없다면 만들어 준다. 새 시트가 추가됐을 때
+  // 사용자가 어느 함수를 먼저 돌려야 하는지 알아야 할 이유가 없다.
+  if (SCHEMA[name]) {
+    ensureSheets_();
+    sheet = ss.getSheetByName(name);
+    if (sheet) return sheet;
+  }
+  throw new Error('시트를 만들 수 없습니다: ' + name);
 }
 
 /** 시트를 객체 배열로 읽는다. */
@@ -461,7 +483,7 @@ function seedMerchants_() {
  * 있는 것은 건드리지 않고 없는 것만 더한다. 여러 번 실행해도 안전하다.
  */
 function resync() {
-  const added = { categories: 0, accounts: 0, rules: 0, merchants: 0 };
+  const added = { sheets: ensureSheets_(), categories: 0, accounts: 0, rules: 0, merchants: 0 };
 
   const haveCategory = {};
   readAll_('Category').forEach(function (c) { haveCategory[c.id] = true; });
@@ -515,7 +537,7 @@ function resync() {
     added.merchants++;
   });
 
-  Logger.log('카테고리 ' + added.categories + '개 · 계정 ' + added.accounts +
+  Logger.log('시트 ' + added.sheets + '개 · 카테고리 ' + added.categories + '개 · 계정 ' + added.accounts +
              '개 · 기본 규칙 ' + added.rules + '개 · 간편결제 ' + added.merchants +
              '개를 더했습니다.');
   return added;

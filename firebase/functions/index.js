@@ -54,7 +54,13 @@ const dedupeId = (body) => createHash('md5').update(String(body || ''), 'utf8').
 const asArray = (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
 export const ingest = onRequest(
-  { region: 'asia-northeast3', cors: false, maxInstances: 3 },
+  {
+    region: 'asia-northeast3',
+    // 단축어는 브라우저가 아니라 CORS와 무관하다. 이 목록은 앱의 "연결 확인"
+    // 버튼을 위한 것이고, 우리 사이트만 허용한다.
+    cors: [/budget-13aec\.web\.app$/, /budget-13aec\.firebaseapp\.com$/],
+    maxInstances: 3,
+  },
   async (req, res) => {
     try {
       if (req.method !== 'POST') throw new HttpError(405, 'method', 'POST 로 보내 주세요');

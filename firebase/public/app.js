@@ -25,7 +25,10 @@ const won = (n) => Number(n || 0).toLocaleString('ko-KR');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-let db, auth, uid, D = null;
+let db, auth, uid, projectId, D = null;
+
+/** 단축어가 두드릴 주소. 웹 화면 주소와 다르다. */
+const ingestUrl = () => `https://asia-northeast3-${projectId}.cloudfunctions.net/ingest`;
 
 function toast(msg) {
   const el = document.createElement('div');
@@ -61,6 +64,7 @@ async function start() {
     return;
   }
 
+  projectId = config.projectId;
   const app = initializeApp(config);
   auth = getAuth(app);
   db = getFirestore(app);
@@ -478,10 +482,21 @@ function renderSetup() {
         <option value="cash">현금</option></select></div></div>
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
 
+  h += `<div class="card">
+    <div class="lbl" style="margin-bottom:6px">단축어가 두드릴 주소</div>
+    <div class="muted" style="margin-bottom:10px">이 화면 주소와 다릅니다.
+    단축어의 <b>URL 콘텐츠 가져오기</b> 에 이걸 넣으세요.</div>
+    <div class="raw" style="margin-bottom:10px">${esc(ingestUrl())}</div>
+    <div style="display:flex;gap:7px">
+      <button type="button" class="act ghost" id="copyUrl" style="flex:1">주소 복사</button>
+      <button type="button" class="act primary" id="pingIngest" style="flex:1">연결 확인</button>
+    </div></div>`;
+
   h += `<form class="card" data-form="token">
     <div class="lbl" style="margin-bottom:6px">단축어 토큰</div>
-    <div class="muted" style="margin-bottom:12px">아이폰 단축어가 문자를 보낼 때 쓰는 열쇠예요.
-    사람은 로그인으로 들어오고, 기계는 이 토큰으로 들어옵니다.</div>
+    <div class="muted" style="margin-bottom:12px">단축어는 새벽에 주머니 속에서 혼자 돌아
+    구글 로그인을 할 수 없어요. 그래서 미리 나눠 가진 열쇠가 필요합니다.
+    이 토큰으로는 <b>문자를 넣는 것만</b> 되고, 가계부를 읽지는 못해요.</div>
     <div class="field"><label>토큰</label>
       <input name="token" type="password" autocomplete="new-password" placeholder="8자 이상" required></div>
     <button type="submit" class="act primary" style="width:100%">저장</button>
@@ -601,6 +616,33 @@ async function saveDoc(kind, values) {
   toast('저장했어요');
 }
 
+/**
+ * 수집 창구를 실제로 두드려 본다.
+ *
+ * 토큰 없이 보내면 함수가 unauthorized 로 되받는데, 그 대답이 오는 것 자체가
+ * 주소가 살아 있다는 뜻이다. 주소를 손으로 옮겨 적기 전에 확인하는 게 낫다.
+ */
+async function pingIngest() {
+  toast('두드려 보는 중…');
+  try {
+    const res = await fetch(ingestUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: '__ping__', body: '' }),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (data.reason === 'unauthorized') return toast('✅ 주소가 살아 있어요');
+    if (data.reason === 'no-token') return toast('주소는 살아 있어요 — 아래에서 토큰을 먼저 저장하세요');
+    if (data.reason === 'not-set-up') return toast('주소는 살아 있는데 주인이 안 잡혔어요');
+    if (res.status === 403) return toast('❌ 함수가 비공개예요 — 알려 주세요');
+    if (res.status === 404) return toast('❌ 주소를 찾지 못했어요 — 함수가 배포됐는지 확인하세요');
+    return toast(`응답: ${res.status} ${data.reason || ''}`);
+  } catch (err) {
+    toast(`❌ 닿지 않아요 — ${err.message}`);
+  }
+}
+
 // ───────────────────────────────────────────────── 이벤트
 
 document.addEventListener('click', async (e) => {
@@ -632,6 +674,18 @@ document.addEventListener('click', async (e) => {
     await refresh();
     return toast('지웠어요');
   }
+
+  if (e.target.id === 'copyUrl') {
+    try {
+      await navigator.clipboard.writeText(ingestUrl());
+      return toast('주소를 복사했어요');
+    } catch {
+      window.prompt('복사하세요', ingestUrl());
+      return;
+    }
+  }
+
+  if (e.target.id === 'pingIngest') return pingIngest();
 
   if (e.target.id === 'refresh') { await refresh(); return toast('새로 불러왔어요'); }
   if (e.target.id === 'signout') return signOut(auth);

@@ -88,9 +88,28 @@ jobs:
       # --debug 를 붙이면 구글이 돌려준 본문이 그대로 나온다.
       # "Permission 'firebaserules.releases.update' denied" 처럼
       # 어떤 권한이 없는지 이름이 찍힌다. 그게 없으면 계속 추측하게 된다.
+      # 규칙은 거의 안 바뀌므로 여기서 막혀도 나머지를 멈추지 않는다.
+      # 권한이 풀릴 때까지는 콘솔에 한 번 붙여넣어 두면 된다
+      # (Firestore > 규칙 > firebase/firestore.rules 내용 붙여넣기 > 게시).
       - name: 보안 규칙 올리기 (Firestore)
+        id: rules
+        continue-on-error: true
         working-directory: firebase
         run: npx --yes firebase-tools@13 deploy --only firestore --non-interactive --debug
+
+      - name: 규칙이 막혔으면 알려 주기
+        if: steps.rules.outcome == 'failure'
+        run: |
+          {
+            echo "### ⚠️ 보안 규칙은 못 올렸습니다"
+            echo ""
+            echo "권한이 풀릴 때까지는 콘솔에 한 번 붙여넣어 두세요."
+            echo ""
+            echo "1. https://console.firebase.google.com/project/budget-13aec/firestore/rules"
+            echo "2. \`firebase/firestore.rules\` 내용을 붙여넣고 **게시**"
+            echo ""
+            echo "규칙은 거의 바뀌지 않으므로 한 번이면 됩니다."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 수집 함수 올리기 (Functions)
         working-directory: firebase

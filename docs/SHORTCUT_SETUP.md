@@ -19,7 +19,7 @@
 
 ```
 1. 현재 위치 가져오기               ← 선택. 빼면 위치 자동분류만 꺼진다
-2. URL의 내용 가져오기
+2. URL 콘텐츠 가져오기
      URL      : 웹 앱 배포 URL (꺾쇠 없이 주소 그대로)
      방식     : POST
      본문     : JSON
@@ -35,7 +35,7 @@
      uncategorized 이면
        4. 메뉴에서 선택
             [suggestions 1] [suggestions 2] [suggestions 3] [직접 입력] [나중에]
-       5. 고른 값으로 다시 URL의 내용 가져오기
+       5. 고른 값으로 다시 URL 콘텐츠 가져오기
             action     : categorize
             txnId      : 2번 응답의 txnId
             categoryId : 고른 카테고리 id

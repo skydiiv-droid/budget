@@ -178,17 +178,36 @@ function detectKind_(text) {
 }
 
 /** 문자 안의 모든 금액을 찾아 앞 라벨로 역할을 붙인다. */
+/**
+ * 문자 안의 금액 후보를 찾는다.
+ *
+ * 숫자를 전부 주우면 날짜(09/19), 시각(14:16), 계좌번호(*478794)까지 딸려 온다.
+ * 그래서 돈이라는 근거가 하나라도 있는 것만 남긴다.
+ *
+ *   "원"이 붙었다        -> 50원 같은 소액도 돈이다
+ *   자릿수 쉼표가 있다    -> 은행 문자는 "원"을 생략하기도 한다
+ *   네 자리 이상 + 라벨   -> "승인 5600" 처럼 둘 다 없는 경우
+ */
 function extractAmounts_(text) {
   const out = [];
-  const re = /(\d{1,3}(?:,\d{3})+|\d{3,})\s*원?/g;
+  const re = /(\d[\d,]*\d|\d)(\s*원)?/g;
   let m;
   while ((m = re.exec(text)) !== null) {
-    const value = parseAmount_(m[1]);
-    if (value === null) continue;
+    const raw = m[1];
     // 마스킹된 계좌번호(*478794)는 금액이 아니다
     if (text.charAt(m.index - 1) === '*') continue;
+
     const before = text.slice(Math.max(0, m.index - 8), m.index);
-    out.push({ value: value, role: roleOf_(before), index: m.index });
+    const role = roleOf_(before);
+    const hasWon = Boolean(m[2]);
+    const hasComma = raw.indexOf(',') >= 0;
+    const longEnough = raw.replace(/,/g, '').length >= 4;
+
+    if (!hasWon && !hasComma && !(longEnough && role !== 'unknown')) continue;
+
+    const value = parseAmount_(raw);
+    if (value === null) continue;
+    out.push({ value: value, role: role, index: m.index });
   }
   return out;
 }
@@ -250,4 +269,47 @@ function hasAny_(text, words) {
     if (text.indexOf(words[i]) >= 0) return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------- 점검
+
+/**
+ * 마지막으로 들어온 문자를 파서가 어떻게 읽는지 보여준다.
+ * 파싱이 실패했을 때 무엇을 놓쳤는지 확인하는 용도.
+ *
+ * 편집기 함수 목록에서 explainLast 를 골라 실행하고 로그를 본다.
+ * (이 함수는 파서 파일 안에 둔다 — 파서만 갈아끼워도 쓸 수 있도록)
+ */
+function explainLast() {
+  const rows = readAll_('RawMessage');
+  if (!rows.length) {
+    Logger.log('받은 문자가 없습니다.');
+    return null;
+  }
+
+  const last = rows[rows.length - 1];
+  const parsed = parseMessage_(last.body, last.sender, new Date(last.receivedAt));
+
+  Logger.log('───── 원문 ─────');
+  Logger.log(last.body);
+  Logger.log('───── 읽은 결과 ─────');
+  Logger.log('발급사   : ' + (parsed.issuer || '(못 찾음)'));
+  Logger.log('종류     : ' + (parsed.kind || '(못 찾음)'));
+  Logger.log('금액     : ' + (parsed.amount === null ? '(못 찾음)' : parsed.amount));
+  Logger.log('잔액     : ' + (parsed.balance === null ? '-' : parsed.balance));
+  Logger.log('누적     : ' + (parsed.cumulative === null ? '-' : parsed.cumulative));
+  Logger.log('가맹점   : ' + (parsed.merchantRaw || '(못 찾음)'));
+  Logger.log('할부     : ' + parsed.installmentMonths + '개월');
+  Logger.log('성공여부 : ' + parsed.ok + (parsed.note ? ' — ' + parsed.note : ''));
+
+  Logger.log('───── 금액 후보 ─────');
+  const candidates = extractAmounts_(String(last.body || ''));
+  if (!candidates.length) {
+    Logger.log('(하나도 못 찾음 — 금액 표기 방식이 예상과 다릅니다)');
+  }
+  candidates.forEach(function (c) {
+    Logger.log(c.value + '  역할: ' + c.role);
+  });
+
+  return parsed;
 }

@@ -112,6 +112,21 @@ check('[실물] 보낸 사람 이름을 상대로 남긴다', () => {
   assert.strictEqual(r.merchantRaw, '홍길동', '누가 보냈는지가 더치페이 정산에 쓰인다');
 });
 
+check('"원"이 붙은 소액도 금액으로 읽는다', () => {
+  const r = parse('[현대카드] 09/15 12:34 승인 50원 일시불 테스트', '15771234');
+  assert.strictEqual(r.amount, 50, '세 자리 미만이라고 버리면 안 된다');
+});
+
+check('쉼표도 "원"도 없지만 라벨이 붙은 숫자는 금액으로 읽는다', () => {
+  const r = parse('[현대카드] 09/15 12:34 승인 5600 일시불 테스트', '15771234');
+  assert.strictEqual(r.amount, 5600);
+});
+
+check('날짜와 시각을 금액으로 읽지 않는다', () => {
+  const r = parse('[현대카드] 09/15 12:34 승인 5,600원 일시불 테스트', '15771234');
+  assert.strictEqual(r.amount, 5600, '09, 15, 12, 34 중 하나를 잡으면 안 된다');
+});
+
 check('[실물] 문자에 적힌 날짜와 시각을 쓴다', () => {
   const r = parse(REAL_WOORI_DEPOSIT, '');
   assert.strictEqual(r.occurredAt.getMonth(), 8);

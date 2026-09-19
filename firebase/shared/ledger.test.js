@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ledger, matchRecurring } from './ledger.js';
+import { ledger, matchRecurring, monthSpending, breakdown, shiftMonth } from './ledger.js';
 
 const NOW = new Date(2026, 8, 20, 12, 0);   // 2026-09-20
 const SETTINGS = { monthlyIncome: 2800000, variableBudget: 1300000, cycleStartDay: 1 };
@@ -111,4 +111,64 @@ test('이름이 가맹점에 들어 있으면 같은 고정지출로 본다', ()
   const rules = [{ id: 'r1', name: '넷플릭스' }];
   assert.ok(matchRecurring({ merchantRaw: '넷플릭스닷컴' }, rules));
   assert.equal(matchRecurring({ merchantRaw: '컴포즈커피' }, rules), null);
+});
+
+// ───────────────────────────────────────────────── 내역
+
+const CATS = [
+  { id: 'cat_food', name: '식비', parentId: '' },
+  { id: 'cat_cafe', name: '카페', parentId: 'cat_food' },
+  { id: 'cat_delivery', name: '배달', parentId: 'cat_food' },
+  { id: 'cat_transport', name: '교통', parentId: '' },
+];
+
+const spend = (data) => monthSpending({ ...data, settings: SETTINGS }, '2026-09', NOW);
+
+test('달을 앞뒤로 옮기면 해가 넘어가도 맞는다', () => {
+  assert.equal(shiftMonth('2026-09', 1), '2026-10');
+  assert.equal(shiftMonth('2026-12', 1), '2027-01');
+  assert.equal(shiftMonth('2026-01', -1), '2025-12');
+});
+
+test('그 달 지출만, 최근 것부터', () => {
+  const rows = spend({ transactions: [
+    { id: 't1', type: 'expense', amount: 1000, occurredAt: '2026-09-03T10:00:00' },
+    { id: 't2', type: 'expense', amount: 2000, occurredAt: '2026-09-18T10:00:00' },
+    { id: 't3', type: 'expense', amount: 3000, occurredAt: '2026-08-31T10:00:00' },
+    { id: 't4', type: 'transfer', amount: 4000, occurredAt: '2026-09-10T10:00:00' },
+    { id: 't5', type: 'expense', amount: 5000, occurredAt: '2026-09-11T10:00:00', status: 'voided' },
+  ] });
+  assert.deepEqual(rows.map((r) => r.id), ['t2', 't1']);
+});
+
+test('예산에서 뺀 건은 목록에 남기되 세지 않는다', () => {
+  const rows = spend({ transactions: [
+    { id: 't1', type: 'expense', amount: 9000, occurredAt: '2026-09-04T10:00:00', excludeFromBudget: true },
+  ] });
+  assert.equal(rows.length, 1, '안 보이면 왜 합계가 다른지 알 길이 없다');
+  assert.equal(rows[0].counted, false);
+  assert.equal(breakdown(rows, CATS).total, 0);
+});
+
+test('하위 칸의 돈은 큰 갈래로 접어 올린다', () => {
+  const rows = spend({ transactions: [
+    { id: 't1', type: 'expense', amount: 4000, occurredAt: '2026-09-04T10:00:00', categoryId: 'cat_cafe' },
+    { id: 't2', type: 'expense', amount: 8000, occurredAt: '2026-09-05T10:00:00', categoryId: 'cat_delivery' },
+    { id: 't3', type: 'expense', amount: 8000, occurredAt: '2026-09-06T10:00:00', categoryId: 'cat_transport' },
+  ] });
+  const b = breakdown(rows, CATS);
+
+  assert.equal(b.total, 20000);
+  assert.deepEqual(b.items.map((i) => [i.id, i.amount, i.pct]),
+    [['cat_food', 12000, 60], ['cat_transport', 8000, 40]]);
+  assert.deepEqual(b.items[0].subs.map((s) => [s.id, s.amount]),
+    [['cat_delivery', 8000], ['cat_cafe', 4000]], '큰 쪽이 먼저');
+  assert.deepEqual(b.items[1].subs, [], '갈래가 하나뿐이면 쪼개지 않는다');
+});
+
+test('카테고리를 안 고른 건은 미분류로 모인다', () => {
+  const rows = spend({ transactions: [
+    { id: 't1', type: 'expense', amount: 3000, occurredAt: '2026-09-04T10:00:00' },
+  ] });
+  assert.equal(breakdown(rows, CATS).items[0].id, 'cat_unknown');
 });

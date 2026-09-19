@@ -32,8 +32,12 @@ h1{font-size:21px;font-weight:600;margin:0;letter-spacing:-.015em}
 .hr{height:1px;background:var(--line2);margin:13px 0}
 .bar{height:10px;border-radius:5px;background:#E4EAF2;overflow:hidden;display:flex}
 .bar>i{border-radius:5px;display:block}
-.item{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line2)}
+.item{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:12px 0;
+  border-bottom:1px solid var(--line2)}
 .item:last-child{border-bottom:0}
+.item>.grow{min-width:118px}
+/* 이름이 길면 버튼이 아랫줄로 내려간다. 글자가 두 줄로 쪼개지는 것보다 낫다. */
+.acts{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
 .empty{text-align:center;padding:26px 16px;color:var(--ink3);font-size:13px;line-height:1.7}
 
 .note{border-radius:14px;padding:14px 15px;font-size:12.5px;line-height:1.6;margin-bottom:12px;
@@ -52,7 +56,7 @@ input:focus,select:focus{outline:2px solid var(--blue);outline-offset:-1px;borde
 .fields>.field{flex:1}
 
 button.act{font:inherit;font-size:13.5px;font-weight:600;min-height:44px;padding:11px 16px;
-  border-radius:10px;cursor:pointer;border:1px solid transparent}
+  border-radius:10px;cursor:pointer;border:1px solid transparent;white-space:nowrap}
 button.primary{background:var(--blue);color:#fff}
 button.ghost{background:#fff;color:var(--ink2);border-color:#D3DCE6}
 button.tint{background:var(--blue-dim);color:#134F9E;border-color:var(--blue-line)}
@@ -84,9 +88,50 @@ button.small{font-size:12px;padding:7px 11px;min-height:36px}
 .pick{font:inherit;font-size:13px;font-weight:500;min-height:44px;padding:10px 14px;
   border-radius:10px;cursor:pointer;background:#fff;color:var(--ink);border:1px solid #D3DCE6}
 .pick[aria-expanded="true"]{background:var(--blue);color:#fff;border-color:var(--blue);font-weight:600}
+/* 지금 들어 있는 칸. 어디서 옮기는 건지 보여야 고를 수 있다. */
+.pick.on{border-color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue);font-weight:600}
+.pick.on::after{content:" ✓";color:var(--blue)}
 .subs{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;padding:11px;
   background:var(--blue-dim);border:1px solid var(--blue-line);border-radius:12px}
 .subs .pick{border-color:var(--blue-line)}
+
+/* 내역 — 어디에 썼는지 한눈에, 누르면 그 자리에서 고친다 */
+.brk{display:flex;align-items:center;gap:11px;width:100%;padding:11px 0;text-align:left;
+  background:none;border:0;border-bottom:1px solid var(--line2);font:inherit;cursor:pointer}
+.brk:last-of-type{border-bottom:0}
+.brk-ico{width:26px;font-size:17px;text-align:center;flex-shrink:0}
+.brk .bar{height:7px;margin-top:5px}
+.brk-amt{font-size:13.5px;font-weight:600;text-align:right;flex-shrink:0}
+.brk-name{display:block;font-size:13.5px;font-weight:600}
+.brk[aria-expanded="true"] .brk-name{color:var(--blue)}
+.brk-sub{display:flex;align-items:center;gap:9px;padding:7px 0 7px 37px;font-size:12.5px;
+  color:var(--ink2);border-bottom:1px solid var(--line2)}
+
+.day{display:flex;align-items:baseline;gap:8px;margin:18px 2px 7px}
+.day-date{font-size:12.5px;font-weight:600;color:var(--ink2)}
+.day-sum{font-size:12px;color:var(--ink3);margin-left:auto;font-variant-numeric:tabular-nums}
+
+.tx{display:flex;align-items:center;gap:11px;width:100%;padding:11px 0;text-align:left;
+  background:none;border:0;border-bottom:1px solid var(--line2);font:inherit;cursor:pointer}
+.tx:last-child{border-bottom:0}
+.tx-name{font-size:13.5px;font-weight:500;display:block;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.tx-amt{font-size:14px;font-weight:600;flex-shrink:0;font-variant-numeric:tabular-nums}
+.tx[aria-expanded="true"]{background:var(--blue-dim);border-radius:10px;padding:11px 10px;
+  border-bottom-color:transparent}
+.tx.off .tx-name,.tx.off .tx-amt{color:var(--ink3);text-decoration:line-through}
+.edit{background:var(--blue-dim);border:1px solid var(--blue-line);border-radius:12px;
+  padding:14px;margin:0 0 11px}
+.check{display:flex;align-items:center;gap:9px;font-size:12.5px;font-weight:500;
+  color:var(--ink2);margin-bottom:12px;cursor:pointer}
+.check input{width:20px;height:20px;min-height:0;flex-shrink:0;accent-color:var(--blue)}
+
+.cat-sel{width:auto;max-width:122px;min-height:36px;font-size:12px;padding:6px 8px;flex-shrink:0}
+details>summary{font-size:12.5px;font-weight:600;color:var(--blue);cursor:pointer;
+  padding:9px 0;list-style:none}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"▸ "}
+details[open]>summary::before{content:"▾ "}
 
 table{width:100%;border-collapse:collapse;font-size:12px}
 th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line2);

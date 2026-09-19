@@ -15,7 +15,7 @@ import {
   deleteDoc, writeBatch, query, orderBy, limit,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
-import { ledger } from './shared/ledger.js';
+import { ledger, monthSpending, breakdown, shiftMonth, monthKey } from './shared/ledger.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
 import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS, CAT_VERSION }
@@ -28,8 +28,15 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
 
 let db, auth, uid, projectId, D = null;
 
-/** 인박스에서 지금 펼쳐 둔 큰 갈래. 거래마다 따로 기억한다. */
+/** 지금 펼쳐 둔 큰 갈래. "어느 화면의 어느 거래" 별로 따로 기억한다. */
 const openMain = new Map();
+
+/** 내역에서 보고 있는 달 · 펼쳐 둔 갈래 · 고치는 중인 거래. */
+let histMonth = null;
+let histOpen = null;
+let editTxn = null;
+
+const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
 
 /**
  * 단축어가 두드릴 주소.
@@ -196,6 +203,7 @@ function render() {
   $('badge').textContent = waiting > 99 ? '99+' : waiting;
 
   renderHome();
+  renderHistory();
   renderInbox();
   renderFixed();
   renderSetup();
@@ -208,6 +216,20 @@ const mainCats = () => expenseCats().filter((c) => !c.parentId);
 const subCats = (parentId) => expenseCats().filter((c) => c.parentId === parentId);
 const catName = (id) => D.categories.find((c) => c.id === id)?.name ?? id;
 const catIcon = (id) => D.categories.find((c) => c.id === id)?.icon ?? '';
+
+/** 내려받는 목록도 두 단계로. 스무 칸을 평평하게 늘어놓으면 고를 수가 없다. */
+function catOptions(selected = '') {
+  const opt = (c, label) =>
+    `<option value="${c.id}"${c.id === selected ? ' selected' : ''}>${esc(label ?? c.name)}</option>`;
+  let h = `<option value=""${selected ? '' : ' selected'}>고르지 않음</option>`;
+  for (const m of mainCats()) {
+    const kids = subCats(m.id);
+    if (!kids.length) { h += opt(m); continue; }
+    h += `<optgroup label="${esc(m.name)}">${opt(m, `${m.name} 전체`)}`
+       + kids.map((c) => opt(c)).join('') + '</optgroup>';
+  }
+  return h;
+}
 
 function flowRow(name, amount, color, sign) {
   return `<div class="row" style="padding:5px 0">
@@ -227,15 +249,15 @@ function renderHome() {
     h += `<div class="card">
       <div class="row"><span class="lbl grow">남은 빚</span>
       ${debt.daysToTarget !== null ? `<span class="muted">목표까지 D-${Math.max(0, debt.daysToTarget)}</span>` : ''}</div>
-      <div class="big num" style="font-size:42px;color:var(--debt);margin:10px 0 14px">₩${won(debt.total)}</div>
-      <div class="bar"><i style="width:${Math.min(100, debt.progressPct)}%;background:var(--flow)"></i></div>
+      <div class="big num" style="font-size:42px;color:var(--spend);margin:10px 0 14px">₩${won(debt.total)}</div>
+      <div class="bar"><i style="width:${Math.min(100, debt.progressPct)}%;background:var(--blue)"></i></div>
       <div class="muted" style="margin-top:7px">
-        <b style="color:var(--flow)">${debt.progressPct}% 갚음</b> · 시작 ₩${won(debt.startAmount)}</div>
+        <b style="color:var(--blue)">${debt.progressPct}% 갚음</b> · 시작 ₩${won(debt.startAmount)}</div>
       <div class="hr"></div>`;
 
     debt.items.forEach((d, i) => {
       h += `<div class="row" style="padding:7px 0">
-        <span style="width:3px;height:26px;border-radius:2px;background:${i === 0 ? 'var(--debt)' : '#C9C4B8'}"></span>
+        <span style="width:3px;height:26px;border-radius:2px;background:${i === 0 ? 'var(--spend)' : '#C9C4B8'}"></span>
         <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(d.name)}</span><br>
           <span class="muted">연 ${Number(d.rate) || 0}%${i === 0 && debt.items.length > 1 ? ' · 먼저 갚기' : ''}</span></span>
         <span class="num" style="font-size:15px;font-weight:600">${won(d.balance)}</span></div>`;
@@ -263,36 +285,52 @@ function renderHome() {
   if (assets.total || debt.total) {
     h += `<div class="card">
       <div class="row"><span class="lbl grow">순자산</span><span class="muted">가진 돈 − 빚</span></div>
-      <div class="big num" style="font-size:30px;margin:9px 0 12px;color:${assets.net >= 0 ? 'var(--ink)' : 'var(--debt)'}">
+      <div class="big num" style="font-size:30px;margin:9px 0 12px;color:${assets.net >= 0 ? 'var(--ink)' : 'var(--spend)'}">
         ${assets.net < 0 ? '−₩' + won(-assets.net) : '₩' + won(assets.net)}</div>`;
     assets.items.filter((a) => a.balance).forEach((a) => {
       h += `<div class="row" style="padding:5px 0">
         <span class="grow" style="font-size:13px;color:var(--ink2)">${esc(a.name)}</span>
-        <span class="num" style="font-size:13.5px;font-weight:600;color:var(--flow)">${won(a.balance)}</span></div>`;
+        <span class="num" style="font-size:13.5px;font-weight:600;color:var(--blue)">${won(a.balance)}</span></div>`;
     });
     if (debt.total) {
       h += `<div class="row" style="padding:5px 0">
         <span class="grow" style="font-size:13px;color:var(--ink2)">빚</span>
-        <span class="num" style="font-size:13.5px;font-weight:600;color:var(--debt)">− ${won(debt.total)}</span></div>`;
+        <span class="num" style="font-size:13.5px;font-weight:600;color:var(--spend)">− ${won(debt.total)}</span></div>`;
     }
     h += '</div>';
   }
 
   h += `<div class="card"><div class="lbl" style="margin-bottom:11px">이번 달 계산</div>
-    ${flowRow('수입', planned.income, 'var(--flow)', '+')}
-    ${flowRow('고정비', planned.fixed, 'var(--debt)', '−')}
-    ${flowRow('생활비 예산', planned.variableBudget, 'var(--debt)', '−')}
+    ${flowRow('수입', planned.income, 'var(--blue)', '+')}
+    ${flowRow('고정비', planned.fixed, 'var(--spend)', '−')}
+    ${flowRow('생활비 예산', planned.variableBudget, 'var(--spend)', '−')}
     <div class="hr"></div>
     <div class="row"><span class="grow" style="font-size:14px;font-weight:600">빚 갚는 데 쓸 돈</span>
-      <span class="big num" style="font-size:22px;color:${planned.available >= 0 ? 'var(--flow)' : 'var(--debt)'}">${won(planned.available)}</span>
+      <span class="big num" style="font-size:22px;color:${planned.available >= 0 ? 'var(--blue)' : 'var(--spend)'}">${won(planned.available)}</span>
     </div></div>`;
+
+  // 쓴 돈은 예산을 잡았든 안 잡았든 늘 보여야 한다. 어디로 갔는지 모르겠다는 게 시작이었다.
+  const spent = monthSpending(histData(), D.ledger.month);
+  const spentTotal = sumCounted(spent);
 
   if (budget.limit) {
     h += `<div class="card">
       <div class="row"><span class="lbl grow">오늘 쓸 수 있는 돈</span><span class="muted">남은 ${budget.daysLeft}일</span></div>
       <div class="big num" style="font-size:32px;margin:9px 0 12px">₩${won(budget.perDay)}</div>
-      <div class="bar"><i style="width:${Math.min(100, budget.usedPct)}%;background:var(--debt)"></i></div>
+      <div class="bar"><i style="width:${Math.min(100, budget.usedPct)}%;background:var(--spend)"></i></div>
       <div class="muted" style="margin-top:7px">${budget.usedPct}% 사용 · 쓴 돈 ₩${won(budget.spent)} · 남은 ₩${won(budget.remaining)}</div>
+      <div class="hr"></div>
+      <button type="button" class="act tint" style="width:100%" data-tab="history">
+        이 달에 쓴 ₩${won(spentTotal)}, 어디에 썼는지 보기 →</button>
+    </div>`;
+  } else if (spent.length) {
+    h += `<div class="card">
+      <div class="row"><span class="lbl grow">이 달에 쓴 돈</span><span class="muted">${spent.length}건</span></div>
+      <div class="big num" style="font-size:34px;color:var(--spend);margin:10px 0 13px">₩${won(spentTotal)}</div>
+      <button type="button" class="act tint" style="width:100%" data-tab="history">
+        어디에 썼는지 보기 →</button>
+      <div class="muted" style="margin-top:9px">설정에서 생활비 예산을 잡으면
+        <b>오늘 쓸 수 있는 돈</b>이 여기 나와요.</div>
     </div>`;
   }
 
@@ -303,6 +341,217 @@ function renderHome() {
   }
 
   $('home').innerHTML = h;
+}
+
+// ───────────────────────────────────────────────── 내역
+
+const histData = () =>
+  ({ transactions: D.txns, settlements: D.settlements, settings: D.settings });
+
+const sumCounted = (rows) => rows.reduce((s, r) => s + (r.counted ? r.net : 0), 0);
+
+/**
+ * 쓴 돈을 보는 곳.
+ *
+ * 홈은 "앞으로 어떻게 할 것인가"를 말하고 여기는 "무엇을 했는가"를 말한다.
+ * 둘을 한 화면에 욱여넣으면 둘 다 안 읽힌다.
+ *
+ * 합계 → 어디에 썼나 → 날짜별 목록 순서다. 큰 것부터 작은 것으로 내려가야
+ * 어디가 새는지 보인다.
+ */
+function renderHistory() {
+  const month = histMonth || D.ledger.month;
+  const [y, m] = month.split('-');
+  const rows = monthSpending(histData(), month);
+  const prev = monthSpending(histData(), shiftMonth(month, -1));
+  const total = sumCounted(rows);
+  const prevTotal = sumCounted(prev);
+  const b = breakdown(rows, D.categories);
+  const atNow = month >= monthKey();
+
+  let diff = '';
+  if (prev.length && prevTotal > 0) {
+    const pct = Math.round(((total - prevTotal) / prevTotal) * 100);
+    diff = ` · 지난달(₩${won(prevTotal)})보다 <b style="color:${pct > 0 ? 'var(--spend)' : 'var(--blue)'}">`
+         + `${pct > 0 ? '+' : pct < 0 ? '−' : '±'}${Math.abs(pct)}%</b>`;
+  }
+
+  let h = `<div class="card">
+    <div class="row">
+      <button type="button" class="act ghost small" data-month="-1" aria-label="지난달">←</button>
+      <div class="grow" style="text-align:center">
+        <div style="font-size:15px;font-weight:600">${Number(y)}년 ${Number(m)}월</div>
+        <div class="muted">${D.settings.cycleStartDay || 1}일부터 한 달</div></div>
+      <button type="button" class="act ghost small" data-month="1" aria-label="다음 달"
+        ${atNow ? 'disabled style="opacity:.32"' : ''}>→</button>
+    </div>
+    <div class="hr"></div>
+    <div class="lbl">이 달에 쓴 돈</div>
+    <div class="big num" style="font-size:40px;color:var(--spend);margin:10px 0 7px">₩${won(total)}</div>
+    <div class="muted">${rows.length}건${diff}</div>
+  </div>`;
+
+  if (!rows.length) {
+    h += `<div class="card"><div class="empty">이 달엔 쓴 기록이 없어요.<br>
+      카드 문자가 들어오면 여기에 쌓입니다.</div></div>`;
+    $('history').innerHTML = h;
+    return;
+  }
+
+  const top = b.items[0]?.amount || 1;
+  h += `<div class="card">
+    <div class="lbl">어디에 썼나</div>
+    <div class="muted" style="margin:4px 0 6px">큰 갈래를 누르면 그 안이 열려요.</div>`;
+  for (const it of b.items) {
+    const open = histOpen === it.id;
+    h += `<button type="button" class="brk" data-open="${it.id}" aria-expanded="${open}">
+      <span class="brk-ico">${esc(catIcon(it.id))}</span>
+      <span class="grow">
+        <span class="brk-name">${esc(catName(it.id))}
+          <span class="muted" style="font-weight:400">${it.count}건</span></span>
+        <span class="bar"><i style="width:${Math.max(3, Math.round((it.amount / top) * 100))}%;background:var(--blue)"></i></span>
+      </span>
+      <span class="brk-amt num">${won(it.amount)}<br><span class="muted">${it.pct}%</span></span>
+    </button>`;
+    if (!open) continue;
+    for (const sub of it.subs) {
+      h += `<div class="brk-sub"><span class="grow">${esc(catIcon(sub.id))} ${esc(catName(sub.id))}
+        <span class="muted">${sub.count}건</span></span>
+        <span class="num" style="font-weight:600">${won(sub.amount)}</span></div>`;
+    }
+    if (!it.subs.length) {
+      h += `<div class="brk-sub"><span class="muted">더 나눌 갈래가 없어요</span></div>`;
+    }
+  }
+  h += '</div>';
+
+  const days = new Map();
+  for (const r of rows) {
+    const key = String(r.occurredAt).slice(0, 10);
+    if (!days.has(key)) days.set(key, []);
+    days.get(key).push(r);
+  }
+
+  h += `<div class="lbl" style="margin:20px 2px 0">쓴 내역 · 누르면 고칠 수 있어요</div>`;
+  for (const [key, list] of days) {
+    const d = new Date(`${key}T00:00:00`);
+    h += `<div class="day">
+      <span class="day-date">${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAY[d.getDay()]})</span>
+      <span class="day-sum">${won(sumCounted(list))}</span></div>
+      <div class="card" style="padding:4px 16px">${list.map(txRow).join('')}</div>`;
+  }
+
+  $('history').innerHTML = h;
+}
+
+function txRow(r) {
+  const open = editTxn === r.id;
+  const cat = r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 아직 안 정함';
+  const note = [cat, r.cardName, r.counted ? '' : '예산에서 뺌'].filter(Boolean).join(' · ');
+
+  let h = `<button type="button" class="tx${r.counted ? '' : ' off'}"
+    data-tx="${r.id}" aria-expanded="${open}">
+    <span class="grow">
+      <span class="tx-name">${esc(r.merchantRaw || '(가게 이름 없음)')}</span>
+      <span class="muted">${esc(note)}</span></span>
+    <span class="tx-amt">${won(r.net)}</span></button>`;
+  return open ? h + txEdit(r) : h;
+}
+
+/**
+ * 거래 하나를 그 자리에서 고친다.
+ *
+ * 잘못 분류된 건을 찾아 놓고 고칠 곳이 딴 데 있으면 아무도 안 고친다.
+ * 규칙까지 함께 고칠 수 있어야 같은 실수가 다음 달에 되풀이되지 않는다.
+ */
+function txEdit(r) {
+  const hint = suggestKeyword(r.merchantRaw, { rules: D.rules, transactions: D.txns });
+  const scopes = scopeOptions(r.merchantRaw, hint);
+  const same = sweepCount(r, scopes[0]);
+
+  let h = `<div class="edit">
+    <div class="lbl" style="margin-bottom:9px">카테고리 바꾸기</div>
+    ${renderPicker(r, null, 'hist', r.categoryId || '')}
+    <div class="field" style="margin:13px 0 0"><label>다음부터 이 가게는</label>
+      <select data-scope="${r.id}">
+        ${scopes.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+      </select></div>
+    <label class="check" data-also style="margin:11px 0 0" ${same ? '' : 'hidden'}>
+      <input type="checkbox" data-alsopast>
+      <span>이미 분류된 지난 <b data-alsocount>${same}</b>건도 같이 바꾸기</span></label>`;
+
+  h += `<div class="hr"></div>
+    <form data-txn="${r.id}">
+      <div class="fields">
+        <div class="field"><label>금액</label>
+          <input name="amount" inputmode="numeric" value="${won(r.amount)}"></div>
+        <div class="field"><label>가게 이름</label>
+          <input name="merchantRaw" value="${esc(r.merchantRaw || '')}"></div></div>
+      <label class="check"><input type="checkbox" name="excludeFromBudget"
+        ${r.excludeFromBudget ? 'checked' : ''}> 이 건은 예산에서 빼기 (더치페이·환불 등)</label>
+      <div style="display:flex;gap:7px">
+        <button type="submit" class="act primary" style="flex:1">저장</button>
+        <button type="button" class="act danger" style="min-height:44px;font-size:13.5px"
+          data-del="txns:${r.id}">삭제</button></div>
+    </form></div>`;
+  return h;
+}
+
+/**
+ * 자동 분류 규칙을 눈에 보이게 하고 고칠 수 있게 한다.
+ *
+ * 자동으로 정해지는 게 어디서 나오는지 안 보이면, 틀렸을 때 고칠 데가 없고
+ * 맞았을 때도 믿을 수가 없다.
+ */
+function renderRules() {
+  const mine = [
+    ...D.merchants
+      .filter((m) => m.defaultCategoryId && !m.isPassthrough && !m.alwaysAsk)
+      .map((m) => ({ key: m.normalizedName, kind: 'merchants', id: m.id,
+                     label: m.displayName || m.normalizedName,
+                     how: '이 가게만', cat: m.defaultCategoryId })),
+    ...D.rules
+      .filter((r) => r.source === 'learned')
+      .map((r) => ({ key: r.pattern, kind: 'rules', id: r.id, label: r.pattern,
+                     how: `이름에 「${r.pattern}」 포함`, cat: r.categoryId })),
+  ];
+  const builtin = D.rules
+    .filter((r) => r.source !== 'learned')
+    .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0))
+    .map((r) => ({ key: r.pattern, kind: 'rules', id: r.id, label: r.pattern,
+                   how: `이름에 「${r.pattern}」 포함`, cat: r.categoryId }));
+  const pass = D.merchants.filter((m) => m.isPassthrough || m.alwaysAsk);
+
+  const row = (x) => `<div class="item" data-rulekey="${esc(x.key)}">
+    <span class="grow"><span style="font-size:13px;font-weight:600">${esc(x.label)}</span><br>
+      <span class="muted">${esc(x.how)}</span></span>
+    <span class="acts">
+      <select class="cat-sel" data-recat="${x.kind}:${x.id}">${catOptions(x.cat)}</select>
+      <button type="button" class="act danger" data-del="${x.kind}:${x.id}">삭제</button></span></div>`;
+
+  let h = `<div class="card">
+    <div class="lbl" style="margin-bottom:6px">자동 분류 규칙</div>
+    <div class="muted" style="margin-bottom:12px">문자가 오면 이 목록을 훑어 카테고리를 정해요.
+      <b>내가 정한 것</b>을 먼저 보고, 거기 없으면 기본 규칙을 봅니다.
+      잘못 정해지는 게 있으면 여기서 바꾸거나 지우세요.</div>
+    <input id="ruleFilter" placeholder="가게 이름으로 찾기" autocomplete="off">
+    <div class="lbl" style="margin:16px 0 0">내가 정한 것 · ${mine.length}개</div>`;
+
+  h += mine.length ? mine.map(row).join('')
+    : `<div class="empty">아직 없어요.<br>정리 화면이나 내역에서 카테고리를 고르면<br>여기에 쌓입니다.</div>`;
+
+  h += `<details style="margin-top:8px">
+    <summary>처음부터 들어 있던 규칙 ${builtin.length}개</summary>
+    ${builtin.map(row).join('')}
+    <div class="lbl" style="margin:16px 0 0">이름을 못 믿는 곳 · ${pass.length}개</div>
+    <div class="muted" style="margin-bottom:2px">간편결제는 가게 이름이 대행사로 찍혀요.
+      이런 곳은 자동으로 정하지 않고 물어봅니다.</div>
+    ${pass.map((m) => `<div class="item" data-rulekey="${esc(m.normalizedName)}">
+      <span class="grow" style="font-size:13px;font-weight:600">${esc(m.displayName || m.normalizedName)}</span>
+      <span class="acts"><button type="button" class="act danger"
+        data-del="merchants:${m.id}">삭제</button></span></div>`).join('')}
+  </details></div>`;
+  return h;
 }
 
 function renderInbox() {
@@ -356,10 +605,8 @@ function renderInbox() {
             <input name="amount" inputmode="numeric" placeholder="9,900"></div>
           <div class="field" style="margin:0"><label>가맹점</label>
             <input name="merchant" placeholder="어디서 썼나요"></div></div>
-        <div class="field"><label>카테고리</label><select name="categoryId">
-          <option value="">고르지 않음</option>
-          ${expenseCats().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}
-        </select></div>
+        <div class="field"><label>카테고리</label>
+          <select name="categoryId">${catOptions()}</select></div>
         <div style="display:flex;gap:7px">
           <button type="submit" class="act primary" style="flex:1">거래로 넣기</button>
           <button type="button" class="act ghost" data-ignore="${r.id}">거래 아님</button>
@@ -377,8 +624,14 @@ function renderInbox() {
  * 하나뿐이면 그 자리에서 정해진다. "배달 · 외식 · 카페"를 한 줄에 늘어놓는 것보다
  * "식비"를 먼저 고르는 편이 생각이 적다.
  */
-function renderPicker(t, hintedId) {
-  const open = openMain.get(t.id);
+function renderPicker(t, hintedId, ns = 'inbox', currentId = '') {
+  const key = `${ns}:${t.id}`;
+  // 아직 아무것도 안 건드렸으면 지금 들어 있는 칸을 펼쳐 둔다. null 은 일부러 닫은 것이다.
+  if (!openMain.has(key) && currentId) {
+    openMain.set(key, D.categories.find((c) => c.id === currentId)?.parentId || null);
+  }
+  const open = openMain.get(key);
+  const mark = (id) => (id === currentId ? ' on' : '');
   let h = '<div class="picks" style="margin-top:13px">';
 
   const hinted = hintedId && D.categories.find((c) => c.id === hintedId);
@@ -391,8 +644,8 @@ function renderPicker(t, hintedId) {
   for (const m of mainCats()) {
     if (hinted && m.id === hinted.id) continue;
     const kids = subCats(m.id);
-    h += `<button type="button" class="pick"
-      ${kids.length ? `data-main="${t.id}:${m.id}" aria-expanded="${open === m.id}"`
+    h += `<button type="button" class="pick${mark(m.id)}"
+      ${kids.length ? `data-main="${ns}:${t.id}:${m.id}" aria-expanded="${open === m.id}"`
                     : `data-pick="${t.id}" data-cat="${m.id}"`}>
       ${esc(m.icon || '')} ${esc(m.name)}</button>`;
   }
@@ -402,7 +655,7 @@ function renderPicker(t, hintedId) {
   if (kids.length) {
     h += '<div class="subs">';
     for (const c of kids) {
-      h += `<button type="button" class="pick" data-pick="${t.id}" data-cat="${c.id}">
+      h += `<button type="button" class="pick${mark(c.id)}" data-pick="${t.id}" data-cat="${c.id}">
         ${esc(c.icon || '')} ${esc(c.name)}</button>`;
     }
     const parent = D.categories.find((x) => x.id === open);
@@ -411,6 +664,23 @@ function renderPicker(t, hintedId) {
     h += '</div>';
   }
   return h;
+}
+
+/**
+ * 「지난 N건도」 의 N. 고른 범위에 따라 달라지므로 범위를 바꾸면 다시 센다.
+ *
+ * 규칙만 고치고 지난 기록을 놔두면, 잘못 분류된 달은 영영 잘못된 채로 남는다.
+ */
+function sweepCount(txn, scopeValue) {
+  const { scope, keyword } = parseScope(scopeValue, txn.merchantRaw);
+  const word = keyword || normalizeMerchant(txn.merchantRaw);
+  if (!word) return 0;
+  return D.txns.filter((t) => {
+    if (t.id === txn.id || t.type !== 'expense' || !t.categoryId) return false;
+    const other = normalizeMerchant(t.merchantRaw);
+    if (!other) return false;
+    return scope === 'contains' ? other.includes(word) : other === word;
+  }).length;
 }
 
 function scopeOptions(merchantRaw, hint) {
@@ -430,7 +700,7 @@ function renderFixed() {
 
   let h = `<div class="card"><div class="lbl">매달 빠져나가는 돈</div>
     <div class="big num" style="font-size:34px;margin:9px 0 6px">₩${won(total)}</div>
-    <div class="muted">1년이면 <b style="color:var(--debt)">₩${won(total * 12)}</b></div></div>`;
+    <div class="muted">1년이면 <b style="color:var(--spend)">₩${won(total * 12)}</b></div></div>`;
 
   h += '<div class="card">';
   if (!list.length) {
@@ -441,8 +711,9 @@ function renderFixed() {
         <span class="muted num" style="width:34px">${r.dayOfMonth ? r.dayOfMonth + '일' : '—'}</span>
         <span class="grow" style="font-size:13.5px;font-weight:500">${esc(r.name)}</span>
         <span class="num" style="font-size:13.5px;font-weight:600">${won(r.expectedAmount)}</span>
-        <button type="button" class="act ghost small" data-edit="recurring:${r.id}">고치기</button>
-        <button type="button" class="act danger" data-del="recurring:${r.id}">삭제</button></div>`;
+        <span class="acts">
+          <button type="button" class="act ghost small" data-edit="recurring:${r.id}">고치기</button>
+          <button type="button" class="act danger" data-del="recurring:${r.id}">삭제</button></span></div>`;
     }
   }
   h += '</div>';
@@ -454,8 +725,8 @@ function renderFixed() {
     <div class="fields">
       <div class="field"><label>금액</label><input name="expectedAmount" inputmode="numeric" placeholder="17,000" required></div>
       <div class="field"><label>결제일</label><input name="dayOfMonth" inputmode="numeric" placeholder="5"></div></div>
-    <div class="field"><label>카테고리</label><select name="categoryId"><option value="">고르지 않음</option>
-      ${expenseCats().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>카테고리</label>
+      <select name="categoryId">${catOptions()}</select></div>
     <button type="submit" class="act primary" style="width:100%">추가</button></form>`;
 
   $('fixed').innerHTML = h;
@@ -489,8 +760,9 @@ function renderSetup() {
         <span style="font-size:13.5px;font-weight:600">${esc(d.name)}</span><br>
         <span class="muted">연 ${Number(d.rate) || 0}%${d.billingDay ? ` · 매월 ${d.billingDay}일` : ''}</span></span>
         <span class="num" style="font-size:14px;font-weight:600">${won(d.balance)}</span>
-        <button type="button" class="act ghost small" data-edit="debts:${d.id}">고치기</button>
-        <button type="button" class="act danger" data-del="debts:${d.id}">삭제</button></div>`;
+        <span class="acts">
+          <button type="button" class="act ghost small" data-edit="debts:${d.id}">고치기</button>
+          <button type="button" class="act danger" data-del="debts:${d.id}">삭제</button></span></div>`;
     }
   }
   h += '</div>';
@@ -517,8 +789,9 @@ function renderSetup() {
         <span style="font-size:13.5px;font-weight:600">${esc(a.name)}</span><br>
         <span class="muted">${esc(ASSET_LABEL[a.type] || a.type)}</span></span>
         <span class="num" style="font-size:14px;font-weight:600">${won(a.balance)}</span>
-        <button type="button" class="act ghost small" data-edit="accounts:${a.id}">고치기</button>
-        <button type="button" class="act danger" data-del="accounts:${a.id}">삭제</button></div>`;
+        <span class="acts">
+          <button type="button" class="act ghost small" data-edit="accounts:${a.id}">고치기</button>
+          <button type="button" class="act danger" data-del="accounts:${a.id}">삭제</button></span></div>`;
     }
   }
   h += '</div>';
@@ -533,6 +806,8 @@ function renderSetup() {
         <option value="checking">입출금</option><option value="savings">저축 · 투자</option>
         <option value="cash">현금</option></select></div></div>
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
+
+  h += renderRules();
 
   h += `<form class="card" data-form="ingestUrl">
     <div class="lbl" style="margin-bottom:6px">문자 받는 주소</div>
@@ -565,13 +840,16 @@ function renderSetup() {
 // ───────────────────────────────────────────────── 고치기
 
 const formData = (form) => Object.fromEntries(
-  [...form.elements].filter((f) => f.name).map((f) => [f.name, f.value]));
+  [...form.elements].filter((f) => f.name)
+    .map((f) => [f.name, f.type === 'checkbox' ? f.checked : f.value]));
 
-async function pickCategory(txnId, categoryId) {
+async function pickCategory(txnId, categoryId, box) {
   const txn = D.txns.find((t) => t.id === txnId);
   if (!txn) return;
 
-  const scopeValue = document.querySelector(`[data-scope="${txnId}"]`)?.value ?? '';
+  // 인박스와 내역에 같은 거래가 동시에 떠 있을 수 있다. 누른 자리의 칸을 봐야 한다.
+  const scopeValue = box?.querySelector('[data-scope]')?.value ?? '';
+  const alsoPast = box?.querySelector('[data-alsopast]')?.checked === true;
   const { scope, keyword } = parseScope(scopeValue, txn.merchantRaw);
 
   const batch = writeBatch(db);
@@ -598,23 +876,31 @@ async function pickCategory(txnId, categoryId) {
   }
 
   // 규칙을 만들면 밀려 있던 같은 가게 건들도 함께 정리한다.
-  // 이미 분류한 건은 건드리지 않는다 — 일부러 다르게 넣었을 수 있다.
+  // 이미 분류한 건은 일부러 다르게 넣었을 수 있으므로, 시켰을 때만 건드린다.
+  const sweepScope = scope === 'once' ? 'exact' : scope;
+  const sweepWord = keyword || normalizeMerchant(txn.merchantRaw);
   let also = 0;
-  if (scope !== 'once' && keyword) {
+  let past = 0;
+
+  if (sweepWord && (scope !== 'once' || alsoPast)) {
     for (const t of D.txns) {
-      if (t.id === txnId || t.status !== 'pendingCategory' || t.categoryId) continue;
+      if (t.id === txnId || t.type !== 'expense' || t.categoryId === categoryId) continue;
+      const waiting = t.status === 'pendingCategory' && !t.categoryId;
+      if (!waiting && !alsoPast) continue;
       const other = normalizeMerchant(t.merchantRaw);
       if (!other) continue;
-      const hit = scope === 'contains' ? other.includes(keyword) : other === keyword;
+      const hit = sweepScope === 'contains' ? other.includes(sweepWord) : other === sweepWord;
       if (!hit) continue;
       batch.update(doc(col('txns'), t.id), { categoryId, status: 'confirmed' });
-      also++;
+      if (waiting) also++; else past++;
     }
   }
 
   await batch.commit();
   await refresh();
-  toast([`${catName(categoryId)}(으)로 저장`, learned, also ? `밀려 있던 ${also}건도 정리` : '']
+  toast([`${catName(categoryId)}(으)로 저장`, learned,
+         also ? `밀려 있던 ${also}건도 정리` : '',
+         past ? `지난 ${past}건도 바꿈` : '']
     .filter(Boolean).join(' · '));
 }
 
@@ -718,7 +1004,8 @@ function guard(handler) {
 document.addEventListener('click', guard(async (e) => {
   const tab = e.target.closest('[data-tab]');
   if (tab) {
-    for (const id of ['home', 'inbox', 'fixed', 'setup']) $(id).hidden = id !== tab.dataset.tab;
+    for (const id of ['home', 'history', 'inbox', 'fixed', 'setup'])
+      $(id).hidden = id !== tab.dataset.tab;
     document.querySelectorAll('.tabs [data-tab]').forEach((b) => {
       if (b.dataset.tab === tab.dataset.tab) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
@@ -727,16 +1014,44 @@ document.addEventListener('click', guard(async (e) => {
     return;
   }
 
+  const month = e.target.closest('[data-month]');
+  if (month) {
+    histMonth = shiftMonth(histMonth || D.ledger.month, Number(month.dataset.month));
+    histOpen = null;
+    editTxn = null;
+    renderHistory();
+    window.scrollTo(0, 0);
+    return;
+  }
+
+  const open = e.target.closest('[data-open]');
+  if (open) {
+    histOpen = histOpen === open.dataset.open ? null : open.dataset.open;
+    renderHistory();
+    return;
+  }
+
+  const tx = e.target.closest('[data-tx]');
+  if (tx) {
+    editTxn = editTxn === tx.dataset.tx ? null : tx.dataset.tx;
+    renderHistory();
+    return;
+  }
+
   const main = e.target.closest('[data-main]');
   if (main) {
-    const [txnId, catId] = main.dataset.main.split(':');
-    openMain.set(txnId, openMain.get(txnId) === catId ? null : catId);
-    renderInbox();
+    const [ns, txnId, catId] = main.dataset.main.split(':');
+    const key = `${ns}:${txnId}`;
+    openMain.set(key, openMain.get(key) === catId ? null : catId);
+    if (ns === 'hist') renderHistory(); else renderInbox();
     return;
   }
 
   const pick = e.target.closest('[data-pick]');
-  if (pick) return pickCategory(pick.dataset.pick, pick.dataset.cat);
+  if (pick) {
+    const box = pick.closest('.edit') || pick.closest('.card');
+    return pickCategory(pick.dataset.pick, pick.dataset.cat, box);
+  }
 
   const ignore = e.target.closest('[data-ignore]');
   if (ignore) {
@@ -767,6 +1082,7 @@ document.addEventListener('click', guard(async (e) => {
   if (del && confirm('지울까요?')) {
     const [name, id] = del.dataset.del.split(':');
     await deleteDoc(doc(col(name), id));
+    if (name === 'txns') editTxn = null;
     await refresh();
     return toast('지웠어요');
   }
@@ -778,6 +1094,42 @@ document.addEventListener('click', guard(async (e) => {
 }));
 
 
+
+document.addEventListener('change', guard(async (e) => {
+  // 범위를 바꾸면 몇 건이 딸려 오는지도 달라진다. 다시 그리면 고른 값이 날아가므로 숫자만 고친다.
+  const scopeSel = e.target.closest('[data-scope]');
+  if (scopeSel) {
+    const box = scopeSel.closest('.edit');
+    const label = box?.querySelector('[data-also]');
+    const txn = D.txns.find((t) => t.id === scopeSel.dataset.scope);
+    if (!label || !txn) return;
+    const n = sweepCount(txn, scopeSel.value);
+    label.querySelector('[data-alsocount]').textContent = n;
+    label.hidden = !n;
+    if (!n) label.querySelector('[data-alsopast]').checked = false;
+    return;
+  }
+
+  const sel = e.target.closest('[data-recat]');
+  if (!sel) return;
+  const [kind, id] = sel.dataset.recat.split(':');
+  const field = kind === 'merchants' ? 'defaultCategoryId' : 'categoryId';
+  await updateDoc(doc(col(kind), id), { [field]: sel.value || null });
+  await refresh();
+  toast('바꿨어요');
+}));
+
+/**
+ * 규칙이 여든 개가 넘는다. 다시 그리면 글자를 치던 칸에서 손이 떨어지므로
+ * 줄을 숨기기만 한다.
+ */
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'ruleFilter') return;
+  const q = e.target.value.trim();
+  for (const el of document.querySelectorAll('[data-rulekey]')) {
+    el.hidden = Boolean(q) && !el.dataset.rulekey.includes(q);
+  }
+});
 
 document.addEventListener('submit', guard(async (e) => {
   e.preventDefault();
@@ -802,6 +1154,18 @@ document.addEventListener('submit', guard(async (e) => {
     await batch.commit();
     await refresh();
     return toast('넣었어요');
+  }
+
+  if (form.dataset.txn) {
+    const amount = parseAmount(values.amount);
+    if (!amount) return toast('금액을 넣어 주세요');
+    await updateDoc(doc(col('txns'), form.dataset.txn), {
+      amount,
+      merchantRaw: String(values.merchantRaw || '').trim(),
+      excludeFromBudget: values.excludeFromBudget === true,
+    });
+    await refresh();
+    return toast('고쳤어요');
   }
 
   if (form.dataset.form === 'ingestUrl') {

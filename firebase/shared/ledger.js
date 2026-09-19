@@ -144,3 +144,79 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
     },
   };
 }
+
+// ───────────────────────────────────────────────── 내역
+
+export const monthKey = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+export function shiftMonth(yyyymm, delta) {
+  const [y, m] = String(yyyymm).split('-').map(Number);
+  return monthKey(new Date(y, m - 1 + delta, 1));
+}
+
+/**
+ * 그 달에 쓴 돈. 최근 것부터.
+ *
+ * 합계와 목록이 어긋나면 안 되므로 ledger 와 같은 잣대를 쓴다. 예산에서 뺀 건과
+ * 정산으로 다 돌려받은 건은 목록에는 남기되 세지 않는다 — 안 보이면 왜 합계가
+ * 다른지 알 길이 없다.
+ */
+export function monthSpending(data = {}, yyyymm, now = new Date()) {
+  const { transactions = [], settlements = [], settings = {} } = data;
+  const win = monthWindow(yyyymm || monthKey(now), settings.cycleStartDay);
+
+  return transactions
+    .filter((t) => t.status !== 'voided' && t.type === 'expense' && inWindow(t.occurredAt, win))
+    .map((t) => {
+      const net = netAmount(t, settlements);
+      return { ...t, net, counted: !t.excludeFromBudget && net > 0 };
+    })
+    .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));
+}
+
+/**
+ * 큰 갈래로 접어 올린 지출.
+ *
+ * 카테고리를 두 단계로 나눈 이유가 여기서 드러난다. 스무 칸을 늘어놓으면
+ * 어디에 새는지 안 보이지만, 큰 갈래 열 개면 한눈에 보인다. 자세히 볼 갈래만
+ * 펼치면 된다.
+ */
+const bySpend = (a, b) => (b.amount - a.amount) || String(a.id).localeCompare(String(b.id));
+
+export function breakdown(rows = [], categories = []) {
+  const find = (id) => categories.find((c) => c.id === id) || null;
+  const mains = new Map();
+  let total = 0;
+
+  for (const r of rows) {
+    if (!r.counted) continue;
+    const c = find(r.categoryId);
+    const mainId = c ? (c.parentId || c.id) : (r.categoryId || 'cat_unknown');
+
+    const m = mains.get(mainId) || { id: mainId, amount: 0, count: 0, subs: new Map() };
+    m.amount += r.net;
+    m.count += 1;
+
+    if (c?.parentId) {
+      const s = m.subs.get(c.id) || { id: c.id, amount: 0, count: 0 };
+      s.amount += r.net;
+      s.count += 1;
+      m.subs.set(c.id, s);
+    }
+    mains.set(mainId, m);
+    total += r.net;
+  }
+
+  const items = [...mains.values()]
+    .map((m) => ({
+      id: m.id,
+      amount: m.amount,
+      count: m.count,
+      pct: total > 0 ? Math.round((m.amount / total) * 100) : 0,
+      subs: [...m.subs.values()].sort(bySpend),
+    }))
+    .sort(bySpend);
+
+  return { total, items };
+}

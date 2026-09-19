@@ -75,9 +75,11 @@ jobs:
         continue-on-error: true
         run: npx --yes firebase-tools@13 projects:list
 
+      # lockfile 을 두지 않으므로 npm ci 가 아니라 install 을 쓴다.
+      # 의존성이 둘뿐이고 Firebase 가 배포 때 다시 설치하므로 고정할 실익이 적다.
       - name: 함수 의존성 설치
         working-directory: firebase/functions
-        run: npm ci --omit=dev || npm install --omit=dev
+        run: npm install --omit=dev --no-audit --no-fund
 
       # 한 번에 올리면 어디서 막혔는지 안 보인다. 나눠서 올린다.
       # 권한이 모자라면 그 단계만 빨개지므로 무엇을 줘야 하는지 바로 안다.

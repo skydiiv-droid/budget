@@ -23,8 +23,9 @@ function ingest(payload) {
 
   if (!body.trim()) return { status: 'ignored', reason: 'empty-body' };
 
-  // [2] 중복 — 단축어가 같은 문자를 두 번 넘기는 경우가 있다
-  const key = dedupeKey_(body, receivedAt);
+  // [2] 중복 — 자동화가 같은 문자를 두 번 넘기거나,
+  //     놓친 문자를 나중에 공유 시트로 다시 보낼 때 걸러진다
+  const key = dedupeKey_(body);
   if (findBy_('RawMessage', 'dedupeKey', key)) {
     return { status: 'duplicate' };
   }

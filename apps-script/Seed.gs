@@ -58,6 +58,25 @@ function seedCategories_() {
   });
 }
 
+// 앱에서 고치는 값들. 0이면 화면이 "설정하세요"를 띄운다.
+const SEED_SETTINGS = [
+  ['monthlyIncome',   0],
+  ['variableBudget',  0],
+  ['debtStartAmount', 0],
+  ['debtStartDate',   ''],
+  ['debtTargetDate',  ''],
+  ['cycleStartDay',   1],
+];
+
+function seedSettings_() {
+  const have = {};
+  readAll_('Settings').forEach(function (s) { have[s.key] = true; });
+  SEED_SETTINGS.forEach(function (row) {
+    if (have[row[0]]) return;
+    append_('Settings', { key: row[0], value: row[1] });
+  });
+}
+
 function seedAccounts_() {
   if (readAll_('Account').length) return;
   SEED_ACCOUNTS.forEach(function (row) {
@@ -245,6 +264,8 @@ function resync() {
     });
     added.accounts++;
   });
+
+  seedSettings_();
 
   const haveMerchant = {};
   readAll_('Merchant').forEach(function (m) { haveMerchant[m.normalizedName] = true; });

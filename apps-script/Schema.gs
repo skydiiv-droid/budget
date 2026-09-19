@@ -52,6 +52,9 @@ const SCHEMA = {
   Anchor: ['id', 'at', 'accountId', 'kind', 'reported', 'computed', 'diff',
            'status', 'rawMessageId'],
 
+  // 빚. 이자율이 높은 것부터 갚아야 총 이자가 가장 적다.
+  Debt: ['id', 'name', 'kind', 'balance', 'rate', 'billingDay', 'note', 'sortOrder'],
+
   Settings: ['key', 'value'],
 };
 
@@ -69,6 +72,7 @@ function setup() {
   seedAccounts_();
   seedRules_();
   seedMerchants_();
+  seedSettings_();
   SpreadsheetApp.getActiveSpreadsheet().toast('시트 준비 완료');
 }
 

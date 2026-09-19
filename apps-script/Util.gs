@@ -4,11 +4,18 @@ function newId_(prefix) {
   return prefix + '_' + Utilities.getUuid().replace(/-/g, '').slice(0, 16);
 }
 
-/** 같은 문자가 두 번 들어와도 한 건으로 취급하기 위한 키. */
-function dedupeKey_(body, receivedAt) {
-  const minute = Utilities.formatDate(receivedAt, CONFIG.timezone, 'yyyyMMddHHmm');
-  const raw = minute + '|' + body;
-  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw, Utilities.Charset.UTF_8);
+/**
+ * 같은 문자가 두 번 들어와도 한 건으로 취급하기 위한 키.
+ *
+ * 받은 시각은 쓰지 않고 원문만 쓴다. 놓친 문자를 나중에 공유 시트로 보낼 때
+ * 받은 시각이 달라지는데, 그것까지 넣으면 같은 결제가 두 건이 되기 때문이다.
+ *
+ * 원문만으로 충분한 이유: 카드 문자에는 월 누적이, 은행 문자에는 잔액이 함께
+ * 찍힌다. 둘 다 거래마다 달라지므로 서로 다른 거래의 원문이 같을 수 없다.
+ */
+function dedupeKey_(body) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.MD5, String(body || ''), Utilities.Charset.UTF_8);
   return bytes.map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
 }
 

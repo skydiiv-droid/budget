@@ -18,7 +18,8 @@ const { execFileSync } = require('child_process');
 
 const CORE = [
   'Config.gs', 'Util.gs', 'Schema.gs', 'Seed.gs',
-  'Classify.gs', 'Menu.gs', 'Settlement.gs', 'Ingest.gs', 'Code.gs', 'Debug.gs',
+  'Classify.gs', 'Menu.gs', 'Settlement.gs', 'Ingest.gs',
+  'Ledger.gs', 'DashboardHtml.gs', 'Web.gs', 'Code.gs', 'Debug.gs',
 ];
 
 const TARGETS = {

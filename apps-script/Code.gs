@@ -7,7 +7,7 @@
  *   POST  {action:"manual",     token, amount, categoryId, memo, occurredAt}
  *   POST  {action:"split",      token, txnId, headcount | expectedAmount}
  *   POST  {action:"splitLink",  token, settlementId, incomeTxnId}
- *   GET   ?token=...             -> 대시보드 (M3)
+ *   GET   ?token=...             -> 대시보드
  *
  * 배포: 배포 > 새 배포 > 웹 앱
  *   실행 주체 = 나,  액세스 권한 = 모든 사용자
@@ -60,30 +60,9 @@ function doGet(e) {
   if (!e || !e.parameter || e.parameter.token !== getIngestToken_()) {
     return HtmlService.createHtmlOutput('<p>접근 권한이 없습니다.</p>');
   }
-  // 대시보드는 M3. 지금은 수집이 살아 있는지만 확인한다.
-  const raw = readAll_('RawMessage');
-  const txns = readAll_('Transaction');
-  const pending = txns.filter(function (t) { return t.status === 'pendingCategory'; });
-  const failed = raw.filter(function (r) { return r.parsedOk !== true; });
-  const last = raw.length ? raw[raw.length - 1].receivedAt : '없음';
-  const openSplits = readAll_('Settlement').filter(function (s) { return s.status === 'open'; });
-  const outstanding = openSplits.reduce(function (sum, s) {
-    return sum + (Number(s.expectedAmount) - Number(s.receivedAmount || 0));
-  }, 0);
-
-  return HtmlService.createHtmlOutput(
-    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
-    '<div style="font:16px/1.6 -apple-system,sans-serif;padding:24px">' +
-    '<h2>수집 상태</h2>' +
-    '<p>받은 문자 <b>' + raw.length + '</b>건</p>' +
-    '<p>거래 <b>' + txns.length + '</b>건</p>' +
-    '<p>미분류 <b>' + pending.length + '</b>건</p>' +
-    '<p>해석 실패 <b>' + failed.length + '</b>건</p>' +
-    '<p>미회수 더치페이 <b>' + openSplits.length + '</b>건 · ' +
-        outstanding.toLocaleString() + '원</p>' +
-    '<p>마지막 수신 <b>' + last + '</b></p>' +
-    '</div>'
-  );
+  return HtmlService.createHtmlOutput(dashboardHtml_(e.parameter.token))
+    .setTitle('가계부')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
 }
 
 /**

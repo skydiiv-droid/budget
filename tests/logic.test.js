@@ -241,6 +241,126 @@ check('이미 분류한 건은 새 규칙이 덮어쓰지 않는다', () => {
     '일부러 다르게 넣었을 수 있다');
 });
 
+console.log('\n계산 (Ledger)');
+
+function books(extra) {
+  const store = createStore({
+    Settings: [
+      { key: 'monthlyIncome', value: 2800000 },
+      { key: 'variableBudget', value: 1300000 },
+      { key: 'cycleStartDay', value: 1 },
+      ...(extra && extra.Settings ? extra.Settings : []),
+    ],
+    ...extra,
+  });
+  if (extra && extra.Settings) store.tables.Settings = createStore({
+    Settings: [
+      { key: 'monthlyIncome', value: 2800000 },
+      { key: 'variableBudget', value: 1300000 },
+      { key: 'cycleStartDay', value: 1 },
+    ].filter((d) => !extra.Settings.some((e) => e.key === d.key)).concat(extra.Settings),
+  }).tables.Settings;
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Ledger.gs'], store);
+  return { ctx, store };
+}
+
+check('갚을 여력 = 수입 − 고정 − 변동 예산', () => {
+  const { ctx } = books({
+    RecurringRule: [{ id: 'r1', name: '넷플릭스', expectedAmount: 17000 }],
+  });
+  const L = ctx.ledger('2026-09');
+  assert.strictEqual(L.planned.fixed, 17000);
+  assert.strictEqual(L.planned.available, 2800000 - 17000 - 1300000);
+});
+
+check('목표일이 있으면 필요한 월 상환액과 부족분을 낸다', () => {
+  const { ctx } = books({
+    Debt: [{ id: 'd1', name: '리볼빙', balance: 5040000, rate: 17.9 }],
+    Settings: [{ key: 'debtTargetDate', value: '2099-01-01' }],
+  });
+  const L = ctx.ledger('2026-09');
+  assert.strictEqual(L.debt.total, 5040000);
+  assert.ok(L.debt.needPerMonth > 0);
+  assert.strictEqual(typeof L.debt.onTrack, 'boolean');
+});
+
+check('여력이 없으면 몇 달 걸리는지 답하지 않는다', () => {
+  const { ctx } = books({
+    Settings: [{ key: 'monthlyIncome', value: 0 }],
+    Debt: [{ id: 'd1', name: '마통', balance: 3000000, rate: 6.8 }],
+  });
+  assert.strictEqual(ctx.ledger('2026-09').debt.paceMonths, null,
+    '0으로 나눠 무한대를 보여주면 안 된다');
+});
+
+check('빚은 이자율이 높은 것이 앞에 온다', () => {
+  const { ctx } = books({
+    Debt: [
+      { id: 'd1', name: '마통',   balance: 3200000, rate: 6.8 },
+      { id: 'd2', name: '리볼빙', balance: 1840000, rate: 17.9 },
+    ],
+  });
+  const items = ctx.ledger('2026-09').debt.items;
+  assert.strictEqual(items[0].name, '리볼빙', '비싼 빚부터 갚아야 총 이자가 적다');
+});
+
+check('진행률은 시작 금액 대비로 센다', () => {
+  const { ctx } = books({
+    Debt: [{ id: 'd1', name: '리볼빙', balance: 5040000, rate: 17.9 }],
+    Settings: [{ key: 'debtStartAmount', value: 7000000 }],
+  });
+  const d = ctx.ledger('2026-09').debt;
+  assert.strictEqual(d.paid, 1960000);
+  assert.strictEqual(d.progressPct, 28);
+});
+
+check('고정지출로 등록한 가게의 결제는 변동지출에서 빠진다', () => {
+  const { ctx } = books({
+    RecurringRule: [{ id: 'r1', name: '넷플릭스', expectedAmount: 17000 }],
+    Transaction: [
+      { id: 't1', type: 'expense', amount: 17000, occurredAt: '2026-09-05T00:00:00',
+        merchantRaw: '넷플릭스', status: 'confirmed' },
+      { id: 't2', type: 'expense', amount: 5000, occurredAt: '2026-09-06T00:00:00',
+        merchantRaw: '컴포즈커피', status: 'confirmed' },
+    ],
+  });
+  const a = ctx.ledger('2026-09').actual;
+  assert.strictEqual(a.fixed, 17000, '구독은 등록 항목이자 카드 결제이기도 하다');
+  assert.strictEqual(a.variable, 5000, '두 번 세면 안 된다');
+});
+
+check('이체는 지출로 세지 않는다', () => {
+  const { ctx } = books({
+    Transaction: [
+      { id: 't1', type: 'transfer', amount: 430000, occurredAt: '2026-09-05T00:00:00',
+        merchantRaw: '현대카드', status: 'confirmed' },
+    ],
+  });
+  assert.strictEqual(ctx.ledger('2026-09').actual.variable, 0,
+    '카드대금을 지출로 잡으면 매달 카드값만큼 부풀어 오른다');
+});
+
+check('더치페이로 돌려받은 만큼은 내 지출이 아니다', () => {
+  const { ctx } = books({
+    Transaction: [
+      { id: 't1', type: 'expense', amount: 93800, occurredAt: '2026-09-14T00:00:00',
+        merchantRaw: '고깃집', status: 'confirmed', settlementId: 's1' },
+    ],
+    Settlement: [{ id: 's1', txnId: 't1', expectedAmount: 70350, receivedAmount: 70350 }],
+  });
+  assert.strictEqual(ctx.ledger('2026-09').actual.variable, 23450);
+});
+
+check('지난달 거래는 이번 달에 안 들어온다', () => {
+  const { ctx } = books({
+    Transaction: [
+      { id: 't1', type: 'expense', amount: 50000, occurredAt: '2026-08-31T23:00:00',
+        merchantRaw: '지난달', status: 'confirmed' },
+    ],
+  });
+  assert.strictEqual(ctx.ledger('2026-09').actual.variable, 0);
+});
+
 console.log('\n카드 두 장 가르기');
 
 function cards(extra) {

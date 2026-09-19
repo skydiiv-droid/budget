@@ -2,7 +2,8 @@
  * 웹앱 진입점.
  *
  *   POST  {action:"ingest",     token, body, sender, receivedAt, lat, lon, placeName}
- *   POST  {action:"categorize", token, txnId, categoryId}
+ *   POST  {action:"categorize", token, txnId, categoryId, scope?, keyword?}
+ *   POST  {action:"forgetRule",  token, pattern}
  *   POST  {action:"manual",     token, amount, categoryId, memo, occurredAt}
  *   POST  {action:"split",      token, txnId, headcount | expectedAmount}
  *   POST  {action:"splitLink",  token, settlementId, incomeTxnId}
@@ -43,6 +44,8 @@ function doPost(e) {
         return jsonResponse_(openSettlement(payload));
       case 'splitLink':
         return jsonResponse_(linkSettlement(payload));
+      case 'forgetRule':
+        return jsonResponse_(forgetRule(payload));
       default:
         return jsonResponse_({ status: 'error', reason: 'unknown-action' });
     }
@@ -83,7 +86,16 @@ function doGet(e) {
   );
 }
 
-/** 아이폰 알림 메뉴에서 카테고리를 고르면 호출된다. */
+/**
+ * 아이폰 알림 메뉴에서 카테고리를 고르면 호출된다.
+ *
+ * scope 로 규칙을 걸 범위를 정한다.
+ *   once     이 건만
+ *   exact    이름이 똑같은 곳만
+ *   contains keyword 가 들어간 모든 곳   (프랜차이즈 지점명 대응)
+ *
+ * scope 를 주지 않으면 서버가 권하는 범위를 쓴다.
+ */
 function categorize(payload) {
   const txn = findBy_('Transaction', 'id', payload.txnId);
   if (!txn) return { status: 'error', reason: 'txn-not-found' };
@@ -92,8 +104,23 @@ function categorize(payload) {
     categoryId: payload.categoryId,
     status: 'confirmed',
   });
-  learn_(txn.merchantRaw, payload.categoryId);
-  return { status: 'ok', txnId: txn.id, categoryId: payload.categoryId };
+
+  const suggested = suggestKeyword_(txn.merchantRaw);
+  const scope = payload.scope || suggested.scope;
+  const keyword = payload.keyword || suggested.keyword;
+
+  const learned = learn_(txn.merchantRaw, payload.categoryId, scope, keyword);
+
+  // 규칙을 만들었으면 밀려 있던 같은 가게 건들도 함께 정리한다
+  const alsoFixed = applyToPending_(payload.categoryId, learned.scope, learned.keyword);
+
+  return {
+    status: 'ok',
+    txnId: txn.id,
+    categoryId: payload.categoryId,
+    learned: learned,
+    alsoFixed: alsoFixed,
+  };
 }
 
 /** 카드 밖의 지출(현금 등)을 손으로 넣는다. */

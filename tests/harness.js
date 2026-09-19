@@ -25,10 +25,13 @@ const Utilities = {
       .replace(/'/g, '');
   },
   // 실제 getUuid는 매번 다른 값을 준다. 같은 값을 돌려주면 id가 겹쳐
-  // findBy_ 가 엉뚱한 행을 집는다.
+  // update_ 와 findBy_ 가 엉뚱한 행을 집는다.
+  //
+  // newId_ 는 대시를 지우고 앞 16자만 쓰므로, 증가 번호를 맨 앞에 둬야 한다.
+  // 뒤에 두면 잘려나가 모든 id가 같아진다.
   getUuid: (() => {
     let n = 0;
-    return () => 'test-uuid-' + String(++n).padStart(12, '0') + '-0000-000000000000';
+    return () => String(++n).padStart(8, '0') + '-aaaa-bbbb-cccc-dddddddddddd';
   })(),
   computeDigest(_algo, input) {
     let hash = 0;

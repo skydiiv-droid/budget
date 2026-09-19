@@ -154,31 +154,204 @@ function normalizeMerchant_(raw) {
 }
 
 /**
- * 사용자가 미분류 건을 고쳐줄 때 호출한다.
- * 같은 가맹점을 두 번 연속 같은 카테고리로 고르면 기본 카테고리로 승격한다.
- * (한 번 잘못 고른 것이 영구 고착되는 걸 막으려고 2회로 둔다)
+ * 가맹점명에서 브랜드로 쓸 만한 낱말을 골라 준다.
+ *
+ * "컴포즈커피발산" 을 카페로 정했을 때, 다음에 "컴포즈커피강남" 이 오면
+ * 또 물어보는 게 맞을까? 프랜차이즈는 지점명이 붙어 이름이 매번 달라진다.
+ * 그래서 규칙을 걸 범위를 정할 수 있어야 하고, 그 후보를 여기서 뽑는다.
+ *
+ * 짚이는 게 없으면 조용히 "이 이름 그대로"를 권한다. 억지로 낱말을 잘라내면
+ * 엉뚱한 곳까지 같이 분류돼 버린다.
  */
-function learn_(merchantRaw, categoryId) {
+function suggestKeyword_(merchantRaw) {
   const normalized = normalizeMerchant_(merchantRaw);
-  if (!normalized) return;
+  if (!normalized) return { scope: 'exact', keyword: '', reason: 'no-merchant' };
 
-  let merchant = findBy_('Merchant', 'normalizedName', normalized);
-  if (!merchant) {
-    merchant = {
-      id: newId_('mch'), normalizedName: normalized, displayName: merchantRaw,
-      defaultCategoryId: '', isPassthrough: false, alwaysAsk: false,
-      aliases: '', hitCount: 0,
-    };
-    append_('Merchant', merchant);
+  // 1. 이미 아는 브랜드가 이름 안에 들어 있으면 그것을 쓴다
+  //    "컴포즈커피발산" 안의 "컴포즈"
+  const known = readAll_('Rule')
+    .filter(function (r) { return r.matchType === 'contains' && r.pattern; })
+    .map(function (r) { return String(r.pattern); })
+    .filter(function (pattern) {
+      return pattern.length >= 2 && normalized.indexOf(pattern) >= 0;
+    })
+    .sort(function (a, b) { return b.length - a.length; });   // 긴 쪽이 더 구체적이다
+  if (known.length) {
+    return { scope: 'contains', keyword: known[0], reason: 'known-brand' };
   }
 
-  const seen = readAll_('Transaction').filter(function (t) {
-    return normalizeMerchant_(t.merchantRaw) === normalized && t.categoryId === categoryId;
+  // 2. 과거에 다녀온 곳들과 앞부분이 겹치면 그 부분이 브랜드다
+  //    "컴포즈커피발산" 과 "컴포즈커피강남" -> "컴포즈커피"
+  const prefix = sharedPrefix_(normalized);
+  if (prefix.length >= 3) {
+    return { scope: 'contains', keyword: prefix, reason: 'shared-prefix' };
+  }
+
+  return { scope: 'exact', keyword: normalized, reason: 'no-clue' };
+}
+
+/** 과거 가맹점들과 겹치는 가장 긴 앞부분. 같은 이름은 세지 않는다. */
+function sharedPrefix_(normalized) {
+  let best = '';
+  readAll_('Transaction').forEach(function (t) {
+    const other = normalizeMerchant_(t.merchantRaw);
+    if (!other || other === normalized) return;
+    let i = 0;
+    while (i < other.length && i < normalized.length && other.charAt(i) === normalized.charAt(i)) i++;
+    if (i > best.length) best = normalized.slice(0, i);
+  });
+  return best;
+}
+
+/**
+ * 사용자가 미분류 건을 고쳐줄 때 호출한다.
+ *
+ *   scope 'once'     이 건만. 규칙을 만들지 않는다
+ *   scope 'exact'    이 가맹점명과 똑같은 것만
+ *   scope 'contains' keyword 가 들어간 모든 가맹점
+ *
+ * 같은 범위의 규칙이 이미 있으면 새로 만들지 않고 카테고리만 바꾼다.
+ * 생각이 바뀌어 다시 고를 때 규칙이 쌓이면 안 된다.
+ */
+function learn_(merchantRaw, categoryId, scope, keyword) {
+  const normalized = normalizeMerchant_(merchantRaw);
+  if (!normalized || !categoryId) return { scope: 'once', reason: 'nothing-to-learn' };
+  if (scope === 'once') return { scope: 'once' };
+
+  const merchant = ensureMerchant_(normalized, merchantRaw);
+
+  if (scope === 'contains') {
+    const pattern = String(keyword || '').trim();
+    if (pattern.length < 2) return { scope: 'once', reason: 'keyword-too-short' };
+
+    const existing = readAll_('Rule').filter(function (r) {
+      return r.matchType === 'contains' && String(r.pattern) === pattern && r.source === 'learned';
+    })[0];
+
+    if (existing) {
+      update_('Rule', existing.id, { categoryId: categoryId });
+      return { scope: 'contains', keyword: pattern, ruleId: existing.id, updated: true };
+    }
+
+    const rule = {
+      id: newId_('rul'),
+      priority: 10,          // 직접 정한 것이니 기본 규칙보다 먼저 본다
+      matchType: 'contains',
+      pattern: pattern,
+      categoryId: categoryId,
+      source: 'learned',
+      hitCount: 0,
+      lastUsedAt: '',
+    };
+    append_('Rule', rule);
+    return { scope: 'contains', keyword: pattern, ruleId: rule.id };
+  }
+
+  // exact — 가맹점 자체에 기본 카테고리를 단다. 규칙 표를 늘리지 않는다.
+  update_('Merchant', merchant.id, { defaultCategoryId: categoryId });
+  return { scope: 'exact', keyword: normalized, merchantId: merchant.id };
+}
+
+function ensureMerchant_(normalized, displayName) {
+  const found = findBy_('Merchant', 'normalizedName', normalized);
+  if (found) {
+    update_('Merchant', found.id, { hitCount: (Number(found.hitCount) || 0) + 1 });
+    return found;
+  }
+  const merchant = {
+    id: newId_('mch'), normalizedName: normalized, displayName: displayName || normalized,
+    defaultCategoryId: '', isPassthrough: false, alwaysAsk: false,
+    aliases: '', hitCount: 1,
+  };
+  append_('Merchant', merchant);
+  return merchant;
+}
+
+/**
+ * 새로 만든 규칙을 아직 분류되지 않은 과거 거래에도 적용한다.
+ * 규칙 하나를 정하면 밀려 있던 같은 가게 건들이 한꺼번에 정리된다.
+ * 이미 분류된 건은 건드리지 않는다 — 사용자가 일부러 다르게 넣었을 수 있다.
+ */
+function applyToPending_(categoryId, scope, keyword) {
+  if (scope === 'once' || !keyword) return 0;
+  let count = 0;
+
+  readAll_('Transaction').forEach(function (t) {
+    if (t.status !== 'pendingCategory' || t.categoryId) return;
+    const normalized = normalizeMerchant_(t.merchantRaw);
+    if (!normalized) return;
+
+    const hit = scope === 'contains'
+      ? normalized.indexOf(keyword) >= 0
+      : normalized === keyword;
+    if (!hit) return;
+
+    update_('Transaction', t.id, { categoryId: categoryId, status: 'confirmed' });
+    count++;
+  });
+  return count;
+}
+
+/** 지금 걸려 있는 분류 규칙을 한눈에 본다. */
+function listRules() {
+  const categoryName = function (id) {
+    const c = findBy_('Category', 'id', id);
+    return c ? c.name : id;
+  };
+
+  const fromMerchants = readAll_('Merchant')
+    .filter(function (m) { return m.defaultCategoryId; })
+    .map(function (m) {
+      return { 범위: '이름이 같으면', 패턴: m.normalizedName,
+               카테고리: categoryName(m.defaultCategoryId), 출처: '직접' };
+    });
+
+  const fromRules = readAll_('Rule').map(function (r) {
+    return {
+      범위: r.matchType === 'contains' ? '포함하면' : '이름이 같으면',
+      패턴: r.pattern,
+      카테고리: categoryName(r.categoryId),
+      출처: r.source === 'learned' ? '직접' : '기본',
+      쓰인횟수: Number(r.hitCount) || 0,
+    };
   });
 
-  if (seen.length >= 1 && !merchant.defaultCategoryId) {
-    // 이번 교정까지 두 번째 -> 승격
-    update_('Merchant', merchant.id, { defaultCategoryId: categoryId });
+  const all = fromMerchants.concat(fromRules);
+  all.forEach(function (row) {
+    Logger.log([row.출처, row.범위, row.패턴, '->', row.카테고리,
+                row.쓰인횟수 === undefined ? '' : '(' + row.쓰인횟수 + '회)'].join(' '));
+  });
+  Logger.log('규칙 ' + all.length + '개');
+  return all;
+}
+
+/** 잘못 만든 규칙을 지운다. 패턴 문자열로 지목한다. */
+function forgetRule(payload) {
+  const pattern = String((payload && payload.pattern) || '').trim();
+  if (!pattern) return { status: 'error', reason: 'need-pattern' };
+
+  let removed = 0;
+
+  const sheet = sheet_('Rule');
+  const headers = SCHEMA.Rule;
+  const values = sheet.getDataRange().getValues();
+  const patternCol = headers.indexOf('pattern');
+  const sourceCol = headers.indexOf('source');
+  // 뒤에서부터 지워야 행 번호가 밀리지 않는다
+  for (let r = values.length - 1; r >= 1; r--) {
+    if (String(values[r][patternCol]) !== pattern) continue;
+    if (values[r][sourceCol] !== 'learned') continue;   // 기본 규칙은 남긴다
+    sheet.deleteRow(r + 1);
+    removed++;
   }
-  update_('Merchant', merchant.id, { hitCount: (Number(merchant.hitCount) || 0) + 1 });
+
+  const merchant = findBy_('Merchant', 'normalizedName', normalizeMerchant_(pattern));
+  if (merchant && merchant.defaultCategoryId) {
+    update_('Merchant', merchant.id, { defaultCategoryId: '' });
+    removed++;
+  }
+
+  Logger.log(removed ? ('규칙 ' + removed + '개를 지웠습니다: ' + pattern)
+                     : ('지울 규칙이 없습니다: ' + pattern));
+  return { status: 'ok', removed: removed };
 }

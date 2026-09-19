@@ -153,6 +153,94 @@ check('모르는 곳은 미분류로 둔다', () => {
   assert.strictEqual(r.categoryId, null);
 });
 
+console.log('\n규칙 학습');
+
+function learner(transactions) {
+  const store = createStore({ Transaction: transactions || [] });
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Seed.gs'], store);
+  ctx.seedRules_();
+  ctx.seedMerchants_();
+  return { ctx, store };
+}
+
+check('아는 브랜드가 이름에 들어 있으면 그 낱말을 권한다', () => {
+  const { ctx } = learner();
+  const s = ctx.suggestKeyword_('컴포즈커피발산');
+  assert.strictEqual(s.scope, 'contains');
+  assert.strictEqual(s.keyword, '컴포즈');
+});
+
+check('과거 가맹점과 겹치는 앞부분을 브랜드로 본다', () => {
+  const { ctx } = learner([
+    { id: 'a', merchantRaw: '동네빵집강남점', categoryId: 'cat_dining' },
+  ]);
+  const s = ctx.suggestKeyword_('동네빵집역삼점');
+  assert.strictEqual(s.scope, 'contains');
+  assert.strictEqual(s.keyword, '동네빵집', '지점명 앞까지가 브랜드다');
+});
+
+check('짚이는 게 없으면 이름 그대로를 권한다', () => {
+  const { ctx } = learner();
+  const s = ctx.suggestKeyword_('듣도보도못한가게');
+  assert.strictEqual(s.scope, 'exact', '억지로 잘라내면 엉뚱한 곳까지 분류된다');
+});
+
+check('exact로 배우면 그 이름만 걸린다', () => {
+  const { ctx } = learner();
+  ctx.learn_('스타벅스역삼점', 'cat_cafe', 'exact', '스타벅스역삼점');
+  assert.strictEqual(ctx.classify_('스타벅스역삼점', 5000, null).categoryId, 'cat_cafe');
+});
+
+check('contains로 배우면 다른 지점도 걸린다', () => {
+  const { ctx } = learner();
+  ctx.learn_('동네빵집역삼점', 'cat_dining', 'contains', '동네빵집');
+  const r = ctx.classify_('동네빵집판교점', 4000, null);
+  assert.strictEqual(r.categoryId, 'cat_dining', '지점이 달라도 같은 브랜드다');
+});
+
+check('once로 고르면 규칙을 만들지 않는다', () => {
+  const { ctx, store } = learner();
+  const before = store.readAll_('Rule').length;
+  ctx.learn_('어쩌다한번집', 'cat_dining', 'once', '어쩌다한번집');
+  assert.strictEqual(store.readAll_('Rule').length, before);
+  assert.strictEqual(ctx.classify_('어쩌다한번집', 9000, null).categoryId, null);
+});
+
+check('같은 낱말로 다시 고르면 규칙이 쌓이지 않고 바뀐다', () => {
+  const { ctx, store } = learner();
+  ctx.learn_('동네빵집역삼점', 'cat_dining', 'contains', '동네빵집');
+  const after1 = store.readAll_('Rule').length;
+  ctx.learn_('동네빵집역삼점', 'cat_cafe', 'contains', '동네빵집');   // 생각이 바뀜
+  assert.strictEqual(store.readAll_('Rule').length, after1, '규칙이 늘면 안 된다');
+  assert.strictEqual(ctx.classify_('동네빵집판교점', 4000, null).categoryId, 'cat_cafe');
+});
+
+check('직접 정한 규칙이 기본 규칙을 이긴다', () => {
+  const { ctx } = learner();
+  ctx.learn_('스타벅스역삼점', 'cat_hobby', 'contains', '스타벅스');   // 카페 아닌 다른 칸으로
+  assert.strictEqual(ctx.classify_('스타벅스강남점', 5000, null).categoryId, 'cat_hobby');
+});
+
+check('규칙을 만들면 밀려 있던 같은 가게 건들도 정리된다', () => {
+  const { ctx, store } = learner([
+    { id: 't1', merchantRaw: '동네빵집역삼점', categoryId: '', status: 'pendingCategory' },
+    { id: 't2', merchantRaw: '동네빵집판교점', categoryId: '', status: 'pendingCategory' },
+    { id: 't3', merchantRaw: '전혀다른곳',     categoryId: '', status: 'pendingCategory' },
+  ]);
+  const fixed = ctx.applyToPending_('cat_dining', 'contains', '동네빵집');
+  assert.strictEqual(fixed, 2);
+  assert.strictEqual(store.findBy_('Transaction', 'id', 't3').categoryId, '', '남은 건 그대로여야 한다');
+});
+
+check('이미 분류한 건은 새 규칙이 덮어쓰지 않는다', () => {
+  const { ctx, store } = learner([
+    { id: 't1', merchantRaw: '동네빵집역삼점', categoryId: 'cat_etc', status: 'confirmed' },
+  ]);
+  ctx.applyToPending_('cat_dining', 'contains', '동네빵집');
+  assert.strictEqual(store.findBy_('Transaction', 'id', 't1').categoryId, 'cat_etc',
+    '일부러 다르게 넣었을 수 있다');
+});
+
 console.log('\n위치 매칭');
 
 check('같은 자리 기록이 쌓이면 자동 분류한다', () => {

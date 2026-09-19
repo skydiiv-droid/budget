@@ -103,6 +103,12 @@ function materialize_(parsed, rawId, location) {
     suggestions: suggestionsFor_(decision),
   };
 
+  // 미분류면 "앞으로 어디까지 같이 취급할지"도 같이 물어볼 수 있게 후보를 싣는다.
+  // 프랜차이즈는 지점명이 붙어 이름이 매번 달라지므로 범위 선택이 필요하다.
+  if (!txn.categoryId && txn.type === 'expense') {
+    response.learnHint = suggestKeyword_(parsed.merchantRaw);
+  }
+
   // 입금이면 열려 있는 더치페이 정산 후보를 함께 돌려준다.
   // 23,450 요청에 23,500이 들어와도 붙일 수 있게 오차를 허용해 고른다.
   if (txn.type === 'income') {

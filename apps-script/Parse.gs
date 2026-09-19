@@ -160,9 +160,11 @@ function applyGeneric_(text, result) {
 }
 
 function detectIssuer_(text, sender) {
-  const haystack = String(sender || '') + ' ' + text;
-  if (/현대\s*카드|현대카드/.test(haystack)) return '현대카드';
-  if (/우리\s*은행|우리은행|\[우리\]/.test(haystack)) return '우리은행';
+  const haystack = String(sender || '') + '\n' + text;
+  if (/현대\s*카드/.test(haystack)) return '현대카드';
+  // 실제 우리은행 문자는 "[Web발신]\n우리 09/19 14:16" 처럼 은행명이 "우리" 한 단어다.
+  // "[우리]" 나 "우리은행" 만 찾으면 놓친다.
+  if (/우리은행|\[우리\]|(^|\n)\s*우리[\s\d]/.test(haystack)) return '우리은행';
   return '';
 }
 
@@ -183,6 +185,8 @@ function extractAmounts_(text) {
   while ((m = re.exec(text)) !== null) {
     const value = parseAmount_(m[1]);
     if (value === null) continue;
+    // 마스킹된 계좌번호(*478794)는 금액이 아니다
+    if (text.charAt(m.index - 1) === '*') continue;
     const before = text.slice(Math.max(0, m.index - 8), m.index);
     out.push({ value: value, role: roleOf_(before), index: m.index });
   }

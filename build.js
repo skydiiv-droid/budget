@@ -10,7 +10,7 @@ const path = require('path');
 // CONFIG/SCHEMA 같은 최상위 const가 먼저 오도록 순서를 고정한다
 const ORDER = [
   'Config.gs', 'Util.gs', 'Schema.gs', 'Seed.gs',
-  'Parse.gs', 'Classify.gs', 'Settlement.gs', 'Ingest.gs', 'Code.gs',
+  'Parse.gs', 'Classify.gs', 'Settlement.gs', 'Ingest.gs', 'Code.gs', 'Debug.gs',
 ];
 
 const src = path.join(__dirname, 'apps-script');

@@ -13,7 +13,7 @@ const CONFIG = {
 
   // 파서 버전. 패턴을 고칠 때마다 올린다.
   // RawMessage에 기록해두고, 구버전으로 파싱된 문자만 골라 재처리한다.
-  parserVersion: 1,
+  parserVersion: 2,
 
   // 승인취소 문자가 원거래를 찾을 때 거슬러 올라가는 기간
   voidMatchWindowDays: 60,

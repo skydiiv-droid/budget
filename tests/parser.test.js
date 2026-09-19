@@ -79,6 +79,47 @@ check('입금을 수입으로 본다', () => {
   assert.strictEqual(r.balance, 3100000);
 });
 
+// ↓ 여기부터는 실제 수신 문자 포맷. 이름/계좌/잔액만 가렸고 배치는 그대로다.
+const REAL_WOORI_DEPOSIT = [
+  '[Web발신]',
+  '우리 09/19 14:16',
+  '*123456',
+  '입금 10,000원',
+  '홍길동',
+  '잔액 500,000원',
+].join('\n');
+
+check('[실물] 여러 줄 문자에서 입금액과 잔액을 가른다', () => {
+  const r = parse(REAL_WOORI_DEPOSIT, '');
+  assert.strictEqual(r.kind, 'deposit');
+  assert.strictEqual(r.amount, 10000);
+  assert.strictEqual(r.balance, 500000);
+  assert.strictEqual(r.ok, true);
+});
+
+check('[실물] 은행명이 "우리" 한 단어여도 인식한다', () => {
+  const r = parse(REAL_WOORI_DEPOSIT, '');
+  assert.strictEqual(r.issuer, '우리은행', '"[우리]"나 "우리은행"만 찾으면 실물을 놓친다');
+});
+
+check('[실물] 마스킹된 계좌번호를 금액으로 읽지 않는다', () => {
+  const r = parse(REAL_WOORI_DEPOSIT, '');
+  assert.notStrictEqual(r.amount, 123456, '*123456은 계좌번호지 돈이 아니다');
+});
+
+check('[실물] 보낸 사람 이름을 상대로 남긴다', () => {
+  const r = parse(REAL_WOORI_DEPOSIT, '');
+  assert.strictEqual(r.merchantRaw, '홍길동', '누가 보냈는지가 더치페이 정산에 쓰인다');
+});
+
+check('[실물] 문자에 적힌 날짜와 시각을 쓴다', () => {
+  const r = parse(REAL_WOORI_DEPOSIT, '');
+  assert.strictEqual(r.occurredAt.getMonth(), 8);
+  assert.strictEqual(r.occurredAt.getDate(), 19);
+  assert.strictEqual(r.occurredAt.getHours(), 14);
+  assert.strictEqual(r.occurredAt.getMinutes(), 16);
+});
+
 console.log('\n공통');
 
 check('광고 문자는 거래를 만들지 않는다', () => {

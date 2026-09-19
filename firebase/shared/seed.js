@@ -162,15 +162,18 @@ export const PASSTHROUGH = [
 ];
 
 export const ACCOUNTS = [
-  // [id, 이름, 종류, 발급사, 결제일]
-  ['acc_woori',    '우리은행',        'checking', '우리은행', ''],
-  ['acc_hd_emart', '현대 이마트Plus', 'card',     '현대카드', 5],
-  ['acc_hd_mirae', '현대 미래에셋',   'card',     '현대카드', 5],
-  ['acc_cash',     '현금',            'cash',     '',         ''],
+  // [id, 이름, 종류, 카드종류, 발급사, 결제일]
+  ['acc_woori',    '우리은행',        'checking', '',       '우리은행', ''],
+  ['acc_hd_emart', '현대 이마트Plus', 'card',     'credit', '현대카드', 10],
+  ['acc_hd_mirae', '현대 미래에셋',   'card',     'credit', '현대카드', 10],
+  ['acc_cash',     '현금',            'cash',     '',       '',         ''],
 ];
 
 export const SETTINGS = {
   monthlyIncome: 0,
+  // 급여일을 주기 시작으로 두면 "쓸 수 있는 돈"이 지갑 현실과 맞는다
+  cycleMode: 'calendar',        // 'calendar' | 'payday'
+  extraHolidays: [],
   variableBudget: 0,
   debtStartAmount: 0,
   debtTargetDate: '',
@@ -193,5 +196,6 @@ export const merchantDocs = () => PASSTHROUGH.map((name, i) =>
   ({ id: `mch_seed_${i}`, normalizedName: name, displayName: name,
      defaultCategoryId: null, isPassthrough: true, alwaysAsk: false }));
 
-export const accountDocs = () => ACCOUNTS.map(([id, name, type, issuer, billingDay]) =>
-  ({ id, name, type, issuer, billingDay, balance: 0, balanceAt: '', active: true }));
+export const accountDocs = () => ACCOUNTS.map(([id, name, type, cardType, issuer, billingDay]) =>
+  ({ id, name, type, cardType, issuer, billingDay, rate: 0, creditLimit: 0,
+     payFromId: '', linkedAccountId: '', balance: 0, balanceAt: '', active: true }));

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ledger, matchRecurring, monthSpending, breakdown, shiftMonth } from './ledger.js';
+import { ledger, matchRecurring, monthSpending, breakdown, shiftMonth, monthWindow,
+         sameSpanLastMonth, pace } from './ledger.js';
 
 const NOW = new Date(2026, 8, 20, 12, 0);   // 2026-09-20
 const SETTINGS = { monthlyIncome: 2800000, variableBudget: 1300000, cycleStartDay: 1 };
@@ -53,17 +54,18 @@ test('지난달 거래는 이번 달에 안 들어온다', () => {
 
 test('빚은 이자율이 높은 것이 앞에 온다', () => {
   const L = run({
-    debts: [
-      { id: 'd1', name: '마통', balance: 3200000, rate: 6.8 },
-      { id: 'd2', name: '리볼빙', balance: 1840000, rate: 17.9 },
+    accounts: [
+      { id: 'a1', name: '마통', type: 'checking', balance: -3200000, rate: 6.8 },
+      { id: 'a2', name: '리볼빙', type: 'loan', balance: 1840000, rate: 17.9 },
     ],
   });
   assert.equal(L.debt.items[0].name, '리볼빙', '비싼 빚부터 갚아야 총 이자가 적다');
-  assert.equal(L.debt.total, 5040000);
+  assert.equal(L.debt.total, 5040000, '마통은 음수 잔액의 절댓값이 빚이다');
+  assert.equal(L.assets.total, 0, '마통이 마이너스면 가진 돈으로 세면 안 된다');
 });
 
 test('진행률은 시작 금액 대비로 센다', () => {
-  const L = run({ debts: [{ id: 'd1', name: '리볼빙', balance: 5040000, rate: 17.9 }] },
+  const L = run({ accounts: [{ id: 'a1', name: '리볼빙', type: 'loan', balance: 5040000, rate: 17.9 }] },
                 { debtStartAmount: 7000000 });
   assert.equal(L.debt.paid, 1960000);
   assert.equal(L.debt.progressPct, 28);
@@ -76,7 +78,7 @@ test('여력이 없으면 몇 달 걸리는지 답하지 않는다', () => {
 });
 
 test('목표일이 있으면 필요한 월 상환액과 부족분을 낸다', () => {
-  const L = run({ debts: [{ id: 'd1', name: '리볼빙', balance: 3000000, rate: 17.9 }] },
+  const L = run({ accounts: [{ id: 'a1', name: '리볼빙', type: 'loan', balance: 3000000, rate: 17.9 }] },
                 { debtTargetDate: '2026-11-20' });
   assert.ok(L.debt.needPerMonth > 0);
   assert.equal(typeof L.debt.onTrack, 'boolean');
@@ -88,9 +90,9 @@ test('순자산 = 가진 돈 − 빚, 카드는 가진 돈이 아니다', () => 
     accounts: [
       { id: 'a1', name: '우리은행', type: 'checking', balance: 500000 },
       { id: 'a2', name: '적금', type: 'savings', balance: 1200000 },
-      { id: 'a3', name: '현대카드', type: 'card', balance: 0 },
+      { id: 'a3', name: '현대카드', type: 'card', cardType: 'credit', balance: 0 },
+      { id: 'a4', name: '리볼빙', type: 'loan', balance: 1840000, rate: 17.9 },
     ],
-    debts: [{ id: 'd1', name: '리볼빙', balance: 1840000, rate: 17.9 }],
   });
   assert.equal(L.assets.total, 1700000);
   assert.equal(L.assets.net, -140000, '빚이 더 크면 순자산은 음수다');
@@ -171,4 +173,50 @@ test('카테고리를 안 고른 건은 미분류로 모인다', () => {
     { id: 't1', type: 'expense', amount: 3000, occurredAt: '2026-09-04T10:00:00' },
   ] });
   assert.equal(breakdown(rows, CATS).items[0].id, 'cat_unknown');
+});
+
+test('지난달과 견줄 때는 같은 날짜까지만 본다', () => {
+  const data = { settings: SETTINGS, transactions: [
+    // 이번 달 19일까지
+    { id: 'a', type: 'expense', amount: 50_000, occurredAt: '2026-09-04T10:00:00' },
+    // 지난달 — 19일 전과 후
+    { id: 'b', type: 'expense', amount: 30_000, occurredAt: '2026-08-04T10:00:00' },
+    { id: 'c', type: 'expense', amount: 900_000, occurredAt: '2026-08-28T10:00:00' },
+  ] };
+  const prev = sameSpanLastMonth(data, '2026-09', NOW);   // 9/20 12:00
+  assert.equal(prev.total, 30_000,
+    '달 전체와 견주면 달 초엔 늘 덜 쓴 게 되고 말일에 뒤집힌다');
+  assert.equal(prev.month, '2026-08');
+  assert.equal(prev.whole, false);
+});
+
+test('달이 끝난 뒤엔 통째로 견준다', () => {
+  const data = { settings: SETTINGS, transactions: [
+    { id: 'c', type: 'expense', amount: 900_000, occurredAt: '2026-08-28T10:00:00' },
+  ] };
+  const prev = sameSpanLastMonth(data, '2026-09', new Date(2026, 9, 5));
+  assert.equal(prev.whole, true);
+  assert.equal(prev.total, 900_000);
+});
+
+test('이 속도면 이 달이 얼마가 되는지', () => {
+  const p = pace(600_000, '2026-09', 1, new Date(2026, 8, 21));   // 20일 흘렀고 30일 달
+  assert.equal(p.dayOf, 20);
+  assert.equal(p.days, 30);
+  assert.equal(p.projected, 900_000, '20일에 60만이면 30일엔 90만');
+});
+
+test('급여일 주기는 쉬는 날이면 앞당겨진다', () => {
+  // 2026-07-05 는 일요일 → 7/3 금요일에 들어온다
+  const plain = monthWindow('2026-07', 5);
+  assert.equal(plain.start.getDate(), 5, '그냥 쓰면 달력 날짜 그대로');
+
+  const paid = monthWindow('2026-07', 5, { payday: true });
+  assert.equal(paid.start.getDate(), 3, '돈이 3일에 들어오면 주기도 3일부터');
+  assert.equal(paid.end.getMonth(), 7, '다음 경계는 8월');
+});
+
+test('1일 시작은 옮길 것이 없다', () => {
+  const w = monthWindow('2026-03', 1, { payday: true });
+  assert.equal(w.start.getDate(), 1, '달력 월은 비교의 기준이라 흔들리면 안 된다');
 });

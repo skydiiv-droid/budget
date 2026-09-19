@@ -12,14 +12,27 @@
  */
 import { normalizeMerchant } from './parse.js';
 import { netAmount } from './settlement.js';
+import { rollup } from './accounts.js';
+import { prevBusinessDay } from './holidays.js';
 
-export function monthWindow(yyyymm, cycleStartDay = 1) {
+/**
+ * 한 주기의 처음과 끝.
+ *
+ * 주기를 급여일에 맞추면 "쓸 수 있는 돈"이 지갑 현실과 맞는다. 급여일이
+ * 쉬는 날이면 돈은 **앞당겨** 들어오므로 주기도 그날부터 시작해야 한다.
+ * 5일이 일요일이면 3일 금요일에 들어오고, 주기도 3일부터다.
+ *
+ * 1일 시작이면 달력 월이라 옮길 것이 없다. 통계와 비교는 이쪽을 쓴다 —
+ * 경계가 해마다 흔들리면 지난달과 견줄 수가 없다.
+ */
+export function monthWindow(yyyymm, cycleStartDay = 1, opts = {}) {
   const [year, month] = String(yyyymm).split('-').map(Number);
   const day = Number(cycleStartDay) || 1;
-  return {
-    start: new Date(year, month - 1, day),
-    end: new Date(year, month, day),
-  };
+  const start = new Date(year, month - 1, day);
+  const end = new Date(year, month, day);
+  if (!opts.payday || day === 1) return { start, end };
+  const extra = opts.holidays || [];
+  return { start: prevBusinessDay(start, extra), end: prevBusinessDay(end, extra) };
 }
 
 const inWindow = (iso, win) => {
@@ -86,12 +99,11 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
   const daysLeft = Math.max(0, Math.round((win.end - now) / 86400000));
   const remaining = Math.max(0, variableBudget - actualVariable);
 
-  // ── 빚 ─────────────────────────────────────────────────
-  const openDebts = debts
-    .filter((d) => Number(d.balance || 0) > 0)
-    .sort((a, b) => Number(b.rate || 0) - Number(a.rate || 0));   // 비싼 빚부터
-
-  const debtTotal = openDebts.reduce((sum, d) => sum + Number(d.balance || 0), 0);
+  // ── 빚 · 가진 돈 · 카드 ─────────────────────────────────
+  // 마이너스통장은 입출금 계좌이면서 빚이다. 한 곳에서 갈라야 양쪽에 겹치지 않는다.
+  const roll = rollup(accounts, transactions, now, settings.extraHolidays || []);
+  const openDebts = roll.debts;
+  const debtTotal = roll.debtTotal;
   const startAmount = Number(settings.debtStartAmount || 0) || debtTotal;
   const paid = Math.max(0, startAmount - debtTotal);
 
@@ -103,14 +115,9 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
   // 여력이 없으면 몇 달 걸리는지 답하지 않는다. 무한대를 보여 주는 건 답이 아니다.
   const paceMonths = available > 0 ? Math.round((debtTotal / available) * 10) / 10 : null;
 
-  // ── 가진 돈 ─────────────────────────────────────────────
-  // 카드는 자산이 아니라 아직 안 낸 돈이므로 세지 않는다.
-  const assets = accounts
-    .filter((a) => a.type !== 'card' && a.active !== false)
-    .map((a) => ({ id: a.id, name: a.name, type: a.type,
-                   balance: Number(a.balance || 0), balanceAt: a.balanceAt }))
-    .sort((a, b) => b.balance - a.balance);
-  const assetTotal = assets.reduce((sum, a) => sum + a.balance, 0);
+  const assets = roll.cash.map((a) => ({ id: a.id, name: a.name, type: a.type,
+                                        balance: a.amount, balanceAt: a.balanceAt }));
+  const assetTotal = roll.cashTotal;
 
   return {
     month,
@@ -138,6 +145,7 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
       onTrack: needPerMonth === null ? null : available >= needPerMonth,
     },
     assets: { items: assets, total: assetTotal, net: assetTotal - debtTotal },
+    cards: { items: roll.bills, total: roll.billTotal },
     inbox: {
       pending: transactions.filter((t) => t.status === 'pendingCategory').length,
       unparsed: raw.filter((r) => !r.parsedOk && !r.txnId).length,
@@ -219,4 +227,52 @@ export function breakdown(rows = [], categories = []) {
     .sort(bySpend);
 
   return { total, items };
+}
+
+/**
+ * 지난달 같은 기간. 달 전체와 견주면 달 초엔 늘 "덜 썼다"가 되고 말일에 뒤집힌다.
+ * 9월 19일까지 쓴 돈은 8월 19일까지 쓴 돈과 견줘야 말이 된다.
+ */
+export function sameSpanLastMonth(data = {}, yyyymm, now = new Date()) {
+  const { settings = {} } = data;
+  const month = yyyymm || monthKey(now);
+  const win = monthWindow(month, settings.cycleStartDay);
+  const elapsed = Math.max(0, Math.min(now.getTime(), win.end.getTime()) - win.start.getTime());
+
+  const prev = shiftMonth(month, -1);
+  const prevWin = monthWindow(prev, settings.cycleStartDay);
+  // 이 달이 이미 끝났으면 지난달도 통째로 본다. 달마다 날 수가 달라
+  // 흘러간 시간을 그대로 옮기면 31일 달에서 하루가 잘린다.
+  const done = now.getTime() >= win.end.getTime();
+  const cut = done ? prevWin.end
+    : new Date(Math.min(prevWin.start.getTime() + elapsed, prevWin.end.getTime()));
+
+  const rows = monthSpending(data, prev, now)
+    .filter((r) => new Date(r.occurredAt).getTime() < cut.getTime());
+
+  return {
+    month: prev,
+    until: cut,
+    rows,
+    total: rows.reduce((sum, r) => sum + (r.counted ? r.net : 0), 0),
+    whole: done,
+  };
+}
+
+/**
+ * 이 속도로 가면 이 달은 얼마가 되나.
+ *
+ * "12% 더 씀"은 남은 날에 뭘 해야 하는지를 말해 주지 않는다. 끝값을 알아야
+ * 지금 줄일지 말지가 정해진다.
+ */
+export function pace(spentSoFar, yyyymm, cycleStartDay, now = new Date()) {
+  const win = monthWindow(yyyymm || monthKey(now), cycleStartDay);
+  const whole = win.end - win.start;
+  const gone = Math.min(Math.max(now - win.start, 0), whole);
+  if (gone <= 0) return { projected: 0, dayOf: 0, days: Math.round(whole / 86400000) };
+  return {
+    projected: Math.round(Number(spentSoFar || 0) * (whole / gone)),
+    dayOf: Math.ceil(gone / 86400000),
+    days: Math.round(whole / 86400000),
+  };
 }

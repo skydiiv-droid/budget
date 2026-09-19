@@ -56,6 +56,23 @@ jobs:
           printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
 
+      # 권한이 모자랄 때 어느 계정에 역할을 줘야 하는지 헤매지 않도록,
+      # 지금 쓰는 계정을 그대로 찍는다. 이메일과 프로젝트 이름은 비밀이 아니다.
+      - name: 누구로 로그인했는지
+        run: |
+          node -e '
+            const sa = require(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+            console.log("서비스 계정 :", sa.client_email);
+            console.log("프로젝트    :", sa.project_id);
+          '
+          echo ""
+          echo "이 계정에 역할을 줘야 합니다:"
+          echo "https://console.cloud.google.com/iam-admin/iam?project=budget-13aec"
+
+      - name: 프로젝트에 닿는지
+        continue-on-error: true
+        run: npx --yes firebase-tools@13 projects:list
+
       - name: 함수 의존성 설치
         working-directory: firebase/functions
         run: npm ci --omit=dev || npm install --omit=dev

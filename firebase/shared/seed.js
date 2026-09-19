@@ -5,36 +5,61 @@
  * 자주 가는 곳을 미리 넣어 두면 첫날부터 대부분 자동으로 갈린다.
  */
 
+export const CAT_VERSION = 2;
+
+/**
+ * 두 단계다. 큰 갈래를 먼저 고르고, 필요하면 그 안에서 더 좁힌다.
+ * "배달 · 외식 · 카페" 를 한 줄에 늘어놓는 것보다 "식비" 하나를 먼저 고르는 편이
+ * 고를 때 생각이 적다.
+ *
+ * 갈래가 하나뿐인 것은 굳이 쪼개지 않는다 — 교통 · 쇼핑처럼.
+ */
 export const CATEGORIES = [
   // [id, 이름, 상위, 종류, 아이콘]
-  ['cat_delivery',    '배달',     '',                 'expense', '🛵'],
-  ['cat_dining',      '외식',     '',                 'expense', '🍚'],
-  ['cat_cafe',        '카페',     'cat_dining',       'expense', '☕'],
-  ['cat_grocery',     '마트',     '',                 'expense', '🛒'],
-  ['cat_convenience', '편의점',   '',                 'expense', '🏪'],
-  ['cat_transport',   '교통',     '',                 'expense', '🚌'],
-  ['cat_medical',     '의료',     '',                 'expense', '🏥'],
-  ['cat_beauty',      '미용',     '',                 'expense', '💇'],
-  ['cat_shopping',    '쇼핑',     '',                 'expense', '🛍️'],
-  ['cat_hobby',       '취미',     '',                 'expense', '🎨'],
-  ['cat_travel',      '여행',     '',                 'expense', '✈️'],
-  ['cat_gathering',   '모임',     '',                 'expense', '🍻'],
-  ['cat_subscription','구독',     '',                 'expense', '📺'],
-  ['cat_sub_digital', '디지털',   'cat_subscription', 'expense', '☁️'],
-  ['cat_sub_media',   '미디어',   'cat_subscription', 'expense', '🎬'],
-  ['cat_telecom',     '통신',     '',                 'expense', '📱'],
-  ['cat_donation',    '기부',     '',                 'expense', '💗'],
-  ['cat_event',       '경조사',   '',                 'expense', '🎁'],
-  ['cat_finance',     '금융비용', '',                 'expense', '💸'],
-  ['cat_etc',         '기타',     '',                 'expense', '📦'],
-  ['cat_unknown',     '미분류',   '',                 'expense', '❓'],
+  ['cat_food',        '식비',   '',             'expense', '🍚'],
+  ['cat_delivery',    '배달',   'cat_food',     'expense', '🛵'],
+  ['cat_dining',      '외식',   'cat_food',     'expense', '🍽️'],
+  ['cat_cafe',        '카페',   'cat_food',     'expense', '☕'],
+  ['cat_convenience', '편의점', 'cat_food',     'expense', '🏪'],
+  ['cat_grocery',     '마트',   'cat_food',     'expense', '🛒'],
 
-  ['cat_salary',      '급여',     '',                 'income',  '💰'],
-  ['cat_settle_in',   '정산입금', '',                 'income',  '🔁'],
+  ['cat_life',        '생활',   '',             'expense', '🏠'],
+  ['cat_medical',     '의료',   'cat_life',     'expense', '🏥'],
+  ['cat_beauty',      '미용',   'cat_life',     'expense', '💇'],
+  ['cat_daily',       '생필품', 'cat_life',     'expense', '🧻'],
 
-  ['cat_cardbill',    '카드대금', '',                 'transfer', '💳'],
-  ['cat_saving',      '저축투자', '',                 'transfer', '🏦'],
-  ['cat_withdraw',    '현금인출', '',                 'transfer', '🏧'],
+  ['cat_leisure',     '여가',   '',             'expense', '🎈'],
+  ['cat_hobby',       '취미',   'cat_leisure',  'expense', '🎨'],
+  ['cat_travel',      '여행',   'cat_leisure',  'expense', '✈️'],
+  ['cat_gathering',   '모임',   'cat_leisure',  'expense', '🍻'],
+
+  ['cat_regular',     '정기',   '',             'expense', '🔁'],
+  ['cat_subscription','구독',   'cat_regular',  'expense', '📺'],
+  ['cat_telecom',     '통신',   'cat_regular',  'expense', '📱'],
+  ['cat_insurance',   '보험',   'cat_regular',  'expense', '🛡️'],
+  ['cat_donation',    '기부',   'cat_regular',  'expense', '💗'],
+
+  ['cat_transport',   '교통',   '',             'expense', '🚌'],
+  ['cat_shopping',    '쇼핑',   '',             'expense', '🛍️'],
+  ['cat_event',       '경조사', '',             'expense', '🎁'],
+  ['cat_finance',     '금융',   '',             'expense', '💸'],
+  ['cat_etc',         '기타',   '',             'expense', '📦'],
+  ['cat_unknown',     '미분류', '',             'expense', '❓'],
+
+  ['cat_salary',      '급여',     '',           'income',  '💰'],
+  ['cat_settle_in',   '정산입금', '',           'income',  '🔁'],
+
+  ['cat_cardbill',    '카드대금', '',           'transfer', '💳'],
+  ['cat_saving',      '저축투자', '',           'transfer', '🏦'],
+  ['cat_withdraw',    '현금인출', '',           'transfer', '🏧'],
+];
+
+/**
+ * 예전에 쓰던 칸. 목록에는 안 보이지만 지난 거래가 가리키고 있어 이름은 남긴다.
+ */
+export const LEGACY_CATEGORIES = [
+  ['cat_sub_digital', '구독(디지털)', 'cat_regular', 'expense', '☁️'],
+  ['cat_subscription',   '구독(미디어)', 'cat_regular', 'expense', '🎬'],
 ];
 
 /**
@@ -45,7 +70,7 @@ export const RULES = [
   [10, '이마트24',      'cat_convenience'],
   [10, 'GS25',          'cat_convenience'],
   [10, '쿠팡이츠',      'cat_delivery'],
-  [10, '쿠팡플레이',    'cat_sub_media'],
+  [10, '쿠팡플레이',    'cat_subscription'],
 
   [20, 'CU',            'cat_convenience'],
   [20, '세븐일레븐',    'cat_convenience'],
@@ -89,23 +114,23 @@ export const RULES = [
   [20, '알리익스프레스','cat_shopping'],
   [20, '다이소',        'cat_shopping'],
 
-  [20, 'APPLE',         'cat_sub_digital'],
-  [20, '애플',          'cat_sub_digital'],
-  [20, 'ICLOUD',        'cat_sub_digital'],
-  [20, 'GOOGLE',        'cat_sub_digital'],
-  [20, '구글',          'cat_sub_digital'],
-  [20, 'ANTHROPIC',     'cat_sub_digital'],
-  [20, 'CLAUDE',        'cat_sub_digital'],
-  [20, 'OPENAI',        'cat_sub_digital'],
-  [20, 'NETFLIX',       'cat_sub_media'],
-  [20, '넷플릭스',      'cat_sub_media'],
-  [20, '티빙',          'cat_sub_media'],
-  [20, '웨이브',        'cat_sub_media'],
-  [20, '왓챠',          'cat_sub_media'],
-  [20, 'YOUTUBE',       'cat_sub_media'],
-  [20, '유튜브',        'cat_sub_media'],
-  [20, '멜론',          'cat_sub_media'],
-  [20, 'SPOTIFY',       'cat_sub_media'],
+  [20, 'APPLE',         'cat_subscription'],
+  [20, '애플',          'cat_subscription'],
+  [20, 'ICLOUD',        'cat_subscription'],
+  [20, 'GOOGLE',        'cat_subscription'],
+  [20, '구글',          'cat_subscription'],
+  [20, 'ANTHROPIC',     'cat_subscription'],
+  [20, 'CLAUDE',        'cat_subscription'],
+  [20, 'OPENAI',        'cat_subscription'],
+  [20, 'NETFLIX',       'cat_subscription'],
+  [20, '넷플릭스',      'cat_subscription'],
+  [20, '티빙',          'cat_subscription'],
+  [20, '웨이브',        'cat_subscription'],
+  [20, '왓챠',          'cat_subscription'],
+  [20, 'YOUTUBE',       'cat_subscription'],
+  [20, '유튜브',        'cat_subscription'],
+  [20, '멜론',          'cat_subscription'],
+  [20, 'SPOTIFY',       'cat_subscription'],
 
   [20, 'SKT',           'cat_telecom'],
   [20, 'KT',            'cat_telecom'],
@@ -153,8 +178,12 @@ export const SETTINGS = {
 };
 
 /** 카테고리를 화면에 쓰기 좋은 모양으로. */
-export const categoryDocs = () => CATEGORIES.map(([id, name, parentId, kind, icon], i) =>
-  ({ id, name, parentId, kind, icon, sortOrder: i }));
+export const categoryDocs = () => [
+  ...CATEGORIES.map(([id, name, parentId, kind, icon], i) =>
+    ({ id, name, parentId, kind, icon, sortOrder: i, hidden: false })),
+  ...LEGACY_CATEGORIES.map(([id, name, parentId, kind, icon], i) =>
+    ({ id, name, parentId, kind, icon, sortOrder: 900 + i, hidden: true })),
+];
 
 export const ruleDocs = () => RULES.map(([priority, pattern, categoryId], i) =>
   ({ id: `rul_seed_${i}`, priority, matchType: 'contains', pattern, categoryId,

@@ -1830,8 +1830,23 @@ button.tiny{font-size:12px;padding:7px 11px;min-height:36px;background:#F2EEE6;
 </div>
 
 <script>
-var TOKEN = '__TOKEN__';
+/* 토큰은 URL에 두지 않는다. 주소가 길어지는 것보다, 방문 기록과 화면 캡처에
+   남는 게 더 문제다. 한 번 넣으면 이 브라우저가 기억한다.
+   ?token= 으로 들어오면 그것을 받아 저장하고, 다음부터는 주소만으로 열린다. */
+var BOOT_TOKEN = '__TOKEN__';
+var STORE_KEY = 'budget.token';
+var TOKEN = '';
 var D = null;
+
+function readStored(){
+  try { return localStorage.getItem(STORE_KEY) || ''; } catch(e){ return ''; }
+}
+function storeToken(t){
+  try { localStorage.setItem(STORE_KEY, t); } catch(e){}
+}
+function forgetToken(){
+  try { localStorage.removeItem(STORE_KEY); } catch(e){}
+}
 
 function won(n){ return Number(n||0).toLocaleString('ko-KR'); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){
@@ -1847,8 +1862,39 @@ function toast(msg){
 
 function fail(err){ toast('실패: ' + (err && err.message ? err.message : err)); }
 
+function showUnlock(msg){
+  document.querySelector('.tabs').hidden = true;
+  el('fixed').hidden = true; el('setup').hidden = true;
+  el('home').hidden = false;
+  el('monthLabel').textContent = '잠김';
+  el('home').innerHTML =
+    '<form class="card" id="unlockForm">'
+    + '<div class="lbl" style="margin-bottom:12px">토큰을 넣어 주세요</div>'
+    + (msg ? '<div class="note warn" style="margin-bottom:12px">' + esc(msg) + '</div>' : '')
+    + '<div class="field"><label for="tk">INGEST_TOKEN</label>'
+    + '<input id="tk" name="token" type="password" autocomplete="current-password" required></div>'
+    + '<button type="submit" class="act primary" style="width:100%">열기</button>'
+    + '<div class="muted" style="margin-top:10px">이 브라우저가 기억하므로 다음부터는 주소만으로 열립니다.</div>'
+    + '</form>';
+}
+
+function unlocked(){
+  document.querySelector('.tabs').hidden = false;
+}
+
 function load(){
-  google.script.run.withSuccessHandler(render).withFailureHandler(fail).apiLoad(TOKEN);
+  TOKEN = BOOT_TOKEN || readStored();
+  if (!TOKEN) { showUnlock(''); return; }
+  google.script.run
+    .withSuccessHandler(function(d){ storeToken(TOKEN); unlocked(); render(d); })
+    .withFailureHandler(function(err){
+      var m = String(err && err.message || err);
+      if (m.indexOf('unauthorized') >= 0){
+        forgetToken(); TOKEN = '';
+        showUnlock('토큰이 맞지 않아요.');
+      } else { fail(err); }
+    })
+    .apiLoad(TOKEN);
 }
 
 function call(fn, arg){
@@ -2022,6 +2068,11 @@ function renderSetup(){
     + '<button type="submit" class="act primary" style="width:100%">저장</button>'
     + '<div class="muted" style="margin-top:10px">이자율을 넣으면 비싼 빚부터 갚으라고 홈에서 알려줍니다.</div></form>';
 
+  h += '<div class="card"><div class="lbl" style="margin-bottom:6px">이 기기</div>'
+    + '<div class="muted" style="margin-bottom:12px">토큰을 이 브라우저가 기억하고 있어요. '
+    + '남의 기기에서 열었다면 지우고 나가세요.</div>'
+    + '<button type="button" class="act ghost" id="lockBtn" style="width:100%">기억한 토큰 지우기</button></div>';
+
   el('setup').innerHTML = h;
 }
 
@@ -2049,6 +2100,11 @@ document.addEventListener('click', function(e){
     });
     return;
   }
+  if (e.target.id === 'lockBtn'){
+    forgetToken(); TOKEN = '';
+    showUnlock('토큰을 지웠어요.');
+    return;
+  }
   var dd = e.target.closest('[data-del-debt]');
   if (dd && confirm('지울까요?')) { call('apiDeleteDebt', dd.dataset.delDebt); return; }
   var dr = e.target.closest('[data-del-rec]');
@@ -2058,6 +2114,11 @@ document.addEventListener('click', function(e){
 document.addEventListener('submit', function(e){
   e.preventDefault();
   var f = e.target;
+  if (f.id === 'unlockForm'){
+    TOKEN = f.elements.token.value.trim();
+    if (TOKEN) load();
+    return;
+  }
   if (f.id === 'setForm') call('apiSaveSettings', formData(f));
   else if (f.id === 'debtForm') call('apiSaveDebt', formData(f));
   else if (f.id === 'recForm') call('apiSaveRecurring', formData(f));
@@ -2229,11 +2290,19 @@ function doPost(e) {
   }
 }
 
+/**
+ * 대시보드를 내려보낸다.
+ *
+ * 토큰을 URL에 요구하지 않는다. 주소가 길어지는 것보다 방문 기록과 화면
+ * 캡처에 토큰이 남는 쪽이 문제이기 때문이다. 여기서 내려보내는 것은 데이터가
+ * 없는 껍데기이고, 값은 전부 api* 함수를 거치며 그쪽에서 토큰을 확인한다.
+ *
+ * ?token= 을 붙여 들어오면 페이지가 그것을 받아 저장하므로, 예전 주소도
+ * 그대로 동작하면서 다음부터는 짧은 주소로 열린다.
+ */
 function doGet(e) {
-  if (!e || !e.parameter || e.parameter.token !== getIngestToken_()) {
-    return HtmlService.createHtmlOutput('<p>접근 권한이 없습니다.</p>');
-  }
-  return HtmlService.createHtmlOutput(dashboardHtml_(e.parameter.token))
+  const given = (e && e.parameter && e.parameter.token) || '';
+  return HtmlService.createHtmlOutput(dashboardHtml_(given))
     .setTitle('가계부')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
 }

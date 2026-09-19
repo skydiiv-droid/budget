@@ -56,11 +56,19 @@ function doPost(e) {
   }
 }
 
+/**
+ * 대시보드를 내려보낸다.
+ *
+ * 토큰을 URL에 요구하지 않는다. 주소가 길어지는 것보다 방문 기록과 화면
+ * 캡처에 토큰이 남는 쪽이 문제이기 때문이다. 여기서 내려보내는 것은 데이터가
+ * 없는 껍데기이고, 값은 전부 api* 함수를 거치며 그쪽에서 토큰을 확인한다.
+ *
+ * ?token= 을 붙여 들어오면 페이지가 그것을 받아 저장하므로, 예전 주소도
+ * 그대로 동작하면서 다음부터는 짧은 주소로 열린다.
+ */
 function doGet(e) {
-  if (!e || !e.parameter || e.parameter.token !== getIngestToken_()) {
-    return HtmlService.createHtmlOutput('<p>접근 권한이 없습니다.</p>');
-  }
-  return HtmlService.createHtmlOutput(dashboardHtml_(e.parameter.token))
+  const given = (e && e.parameter && e.parameter.token) || '';
+  return HtmlService.createHtmlOutput(dashboardHtml_(given))
     .setTitle('가계부')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
 }

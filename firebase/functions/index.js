@@ -200,8 +200,12 @@ function buildTransaction(parsed, rawId, location, decision, id) {
       txn.status = 'confirmed';
     }
   } else if (parsed.kind === 'cancel') {
+    // 취소는 지출이 아니다. 지출로 두면 쓴 적 없는 돈이 통계에 남는다.
+    // 원래 결제를 찾아 없던 일로 만드는 건 앱에서 한다 — 거기에 지난 거래가 있다.
+    txn.type = 'cancel';
     txn.status = 'needsReview';
-    txn.memo = '승인취소 — 원거래를 찾아 상계해야 함';
+    txn.categoryId = null;
+    txn.excludeFromBudget = true;
   }
 
   return txn;

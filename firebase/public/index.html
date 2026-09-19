@@ -30,6 +30,8 @@
   <div class="wrap">
     <div class="row" style="margin-bottom:14px">
       <div class="grow"><h1>가계부</h1><div class="sub" id="monthLabel"></div></div>
+      <button type="button" class="act ghost" id="peek" hidden
+        style="min-height:38px;padding:8px 11px;font-size:15px" aria-label="금액 잠깐 보기">👁</button>
       <button type="button" class="act ghost" id="refresh" style="min-height:38px;padding:8px 12px;font-size:12.5px">새로고침</button>
     </div>
     <section id="home"></section>
@@ -37,6 +39,47 @@
     <section id="inbox" hidden></section>
     <section id="fixed" hidden></section>
     <section id="setup" hidden></section>
+  </div>
+
+  <button type="button" class="fab" id="quickOpen" aria-label="직접 넣기">＋</button>
+
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-back" data-close></div>
+    <form class="sheet-box" data-form="quick" novalidate>
+      <div class="row" style="margin-bottom:14px">
+        <span class="grow" style="font-size:16px;font-weight:600">직접 넣기</span>
+        <button type="button" class="act ghost small" data-close>닫기</button></div>
+
+      <div class="seg" role="tablist">
+        <button type="button" data-kind="expense" aria-current="page">쓴 돈</button>
+        <button type="button" data-kind="income">받은 돈</button>
+        <button type="button" data-kind="transfer">옮긴 돈</button>
+      </div>
+      <input type="hidden" name="type" value="expense">
+
+      <div class="fields" style="margin-top:14px">
+        <div class="field" style="flex:2"><label>금액</label>
+          <input name="amount" inputmode="numeric" placeholder="12,000" required></div>
+        <div class="field" style="flex:3"><label>날짜</label>
+          <input name="date" type="date"></div></div>
+
+      <div class="field"><label id="quickWhatLabel">어디에 썼나요</label>
+        <input name="merchantRaw" placeholder="가게 이름이나 내용"></div>
+
+      <div class="field" data-qwhen="expense income"><label>카테고리</label>
+        <select name="categoryId"></select></div>
+
+      <div class="field" data-qwhen="expense transfer"><label id="quickFromLabel">어디서 나갔나요</label>
+        <select name="accountId"></select></div>
+      <div class="field" data-qwhen="income transfer">
+        <label id="quickToLabel">어디로 들어왔나요</label>
+        <select name="toAccountId"></select></div>
+
+      <label class="check" data-qwhen="expense"><input type="checkbox" name="excludeFromBudget">
+        <span>예산에서 빼기 (더치페이·환불 등)</span></label>
+
+      <button type="submit" class="act primary" style="width:100%">넣기</button>
+    </form>
   </div>
 
   <nav class="tabs" aria-label="화면">

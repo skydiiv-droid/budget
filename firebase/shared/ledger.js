@@ -145,6 +145,7 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
       onTrack: needPerMonth === null ? null : available >= needPerMonth,
     },
     assets: { items: assets, total: assetTotal, net: assetTotal - debtTotal },
+    goal: goalProgress(settings, { debtTotal, assetTotal, available }, now),
     cards: { items: roll.bills, total: roll.billTotal },
     inbox: {
       pending: transactions.filter((t) => t.status === 'pendingCategory').length,
@@ -274,5 +275,67 @@ export function pace(spentSoFar, yyyymm, cycleStartDay, now = new Date()) {
     projected: Math.round(Number(spentSoFar || 0) * (whole / gone)),
     dayOf: Math.ceil(gone / 86400000),
     days: Math.round(whole / 86400000),
+  };
+}
+
+// ───────────────────────────────────────────────── 목표
+
+/**
+ * 목표.
+ *
+ * 처음에는 "빚 갚기"만 있었다. 그런데 빚을 다 갚으면 홈이 텅 빈다. 갚는 것도
+ * 모으는 것도 "지금 얼마이고 어디까지 가야 하는가"라는 같은 모양이라,
+ * 하나로 두고 방향만 바꾼다.
+ *
+ *   payoff  빚을 줄인다 — 시작 금액에서 0 으로
+ *   save    돈을 모은다 — 0 에서 목표 금액으로
+ *   keep    목표 없이 지켜본다
+ */
+export function goalProgress(settings = {}, now_ = {}, now = new Date()) {
+  const { debtTotal = 0, assetTotal = 0, available = 0 } = now_;
+
+  // 빚 목표만 쓰던 시절의 설정을 그대로 읽는다
+  const g = settings.goal || {
+    kind: debtTotal > 0 || settings.debtStartAmount ? 'payoff' : 'keep',
+    name: '빚 정리',
+    startAmount: Number(settings.debtStartAmount || 0),
+    targetAmount: 0,
+    targetDate: settings.debtTargetDate || '',
+  };
+
+  const kind = g.kind || 'keep';
+  const targetDate = g.targetDate || '';
+  const daysToTarget = targetDate
+    ? Math.round((new Date(targetDate) - now) / 86400000) : null;
+  const monthsToTarget = daysToTarget === null ? null : daysToTarget / 30.44;
+
+  if (kind === 'keep') {
+    return { kind, name: g.name || '지켜보기', current: assetTotal - debtTotal,
+             pct: null, remaining: null, daysToTarget, needPerMonth: null,
+             paceMonths: null, onTrack: null, done: false };
+  }
+
+  const isPayoff = kind === 'payoff';
+  const start = Number(g.startAmount || 0) || (isPayoff ? debtTotal : 0);
+  const target = isPayoff ? 0 : Number(g.targetAmount || 0);
+  const current = isPayoff ? debtTotal : assetTotal;
+
+  const span = Math.abs(start - target);
+  const moved = isPayoff ? Math.max(0, start - current) : Math.max(0, current - start);
+  const remaining = Math.max(0, isPayoff ? current : target - current);
+
+  const needPerMonth = (monthsToTarget && monthsToTarget > 0)
+    ? Math.round(remaining / monthsToTarget) : null;
+  // 여력이 없으면 몇 달 걸리는지 답하지 않는다. 무한대는 답이 아니다.
+  const paceMonths = available > 0 ? Math.round((remaining / available) * 10) / 10 : null;
+
+  return {
+    kind, name: g.name || (isPayoff ? '빚 정리' : '모으기'),
+    start, target, current, moved, remaining,
+    pct: span > 0 ? Math.min(100, Math.round((moved / span) * 100)) : 0,
+    targetDate, daysToTarget, needPerMonth, paceMonths,
+    shortfall: needPerMonth === null ? null : Math.max(0, needPerMonth - available),
+    onTrack: needPerMonth === null ? null : available >= needPerMonth,
+    done: remaining <= 0,
   };
 }

@@ -8,6 +8,20 @@
 export const CAT_VERSION = 2;
 
 /**
+ * 처음에 넣어 둔 계좌 정보를 고쳐야 할 때 올린다.
+ *
+ * 카드 결제일을 5일로 넣어 뒀는데 실제로는 10일이었다. 쓰는 사람이 직접 고친
+ * 값은 건드리지 않고, 내가 잘못 넣은 기본값만 바로잡는다.
+ */
+export const ACCOUNT_VERSION = 2;
+
+/** [계좌 id, 고칠 것, 그 값이 아직 내가 넣은 채일 때만] */
+export const ACCOUNT_FIXES = [
+  ['acc_hd_emart', { billingDay: 10, cardType: 'credit' }, { billingDay: 5 }],
+  ['acc_hd_mirae', { billingDay: 10, cardType: 'credit' }, { billingDay: 5 }],
+];
+
+/**
  * 두 단계다. 큰 갈래를 먼저 고르고, 필요하면 그 안에서 더 좁힌다.
  * "배달 · 외식 · 카페" 를 한 줄에 늘어놓는 것보다 "식비" 하나를 먼저 고르는 편이
  * 고를 때 생각이 적다.

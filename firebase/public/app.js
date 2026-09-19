@@ -18,10 +18,11 @@ import {
 import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMonth, pace }
   from './shared/ledger.js';
 import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf } from './shared/accounts.js';
+import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
-import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS, CAT_VERSION }
-  from './shared/seed.js';
+import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
+         CAT_VERSION, ACCOUNT_VERSION, ACCOUNT_FIXES } from './shared/seed.js';
 
 const $ = (id) => document.getElementById(id);
 const won = (n) => Number(n || 0).toLocaleString('ko-KR');
@@ -55,6 +56,49 @@ const openFold = new Set();
  */
 const INGEST_DEFAULT = 'https://ingest-6ygn4mmscq-du.a.run.app';
 const ingestUrl = () => D?.ingest?.url || INGEST_DEFAULT;
+
+/**
+ * 금액 가리기.
+ *
+ * 병원에서 누가 어깨너머로 보면 빚 액수가 그대로 보인다. 켜 두면 늘 흐려 있고,
+ * 눈 버튼으로 잠깐 볼 수 있다. 잠깐 본 뒤에는 알아서 다시 가려진다 —
+ * 확인하려고 열었다가 그대로 두고 자리를 뜨는 게 사람이다.
+ */
+const PEEK_SECONDS = 30;
+let peekTimer = null;
+
+const privacyOn = () => {
+  try { return localStorage.getItem('privacy') === 'on'; } catch { return false; }
+};
+
+function applyMask(masked) {
+  document.body.classList.toggle('masked', masked);
+  const btn = $('peek');
+  if (btn) btn.textContent = masked ? '👁' : '🙈';
+}
+
+function setPrivacy(on) {
+  try { localStorage.setItem('privacy', on ? 'on' : 'off'); } catch { /* 사파리 비공개 모드 */ }
+  clearTimeout(peekTimer);
+  const btn = $('peek');
+  if (btn) btn.hidden = !on;
+  applyMask(on);
+}
+
+function peek() {
+  clearTimeout(peekTimer);
+  if (document.body.classList.contains('masked')) {
+    applyMask(false);
+    peekTimer = setTimeout(() => applyMask(true), PEEK_SECONDS * 1000);
+  } else {
+    applyMask(true);
+  }
+}
+
+// 화면을 떠나면 다시 가린다. 열어 둔 채 자리를 뜨는 게 사람이다.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && privacyOn()) applyMask(true);
+});
 
 function toast(msg) {
   const el = document.createElement('div');
@@ -103,6 +147,7 @@ async function start() {
       await seedIfEmpty();
       await syncCategories();
       await migrateDebts();
+      await fixSeededAccounts();
       await refresh();
     } catch (err) {
       screen(`<h1>열지 못했어요</h1>
@@ -191,6 +236,32 @@ async function syncCategories() {
  * 마이너스통장은 입출금 계좌이면서 빚이다. 따로 두니 어디에 넣을지 애매했고,
  * 양쪽에 넣으면 두 번 세어졌다. 한 번만 옮기고 끝낸다.
  */
+/**
+ * 내가 잘못 넣은 기본값을 바로잡는다.
+ *
+ * 카드 결제일을 5일로 seed 해 뒀는데 10일이었다. 이미 쓰고 있는 사람에게는
+ * seed 가 다시 돌지 않으므로 여기서 고친다. 쓰는 사람이 직접 고쳐 둔 값은
+ * 건드리지 않는다 — 내가 틀렸다고 남의 답까지 지울 이유는 없다.
+ */
+async function fixSeededAccounts() {
+  const metaRef = doc(db, 'users', uid, 'meta', 'settings');
+  const meta = await getDoc(metaRef);
+  if (Number(meta.data()?.accountVersion || 0) >= ACCOUNT_VERSION) return;
+
+  const have = await readAll('accounts');
+  const ops = [];
+  for (const [id, patch, onlyIf] of ACCOUNT_FIXES) {
+    const row = have.find((a) => a.id === id);
+    if (!row) continue;
+    const untouched = Object.entries(onlyIf)
+      .every(([k, v]) => String(row[k] ?? '') === String(v));
+    if (!untouched) continue;
+    ops.push((b) => b.set(doc(col('accounts'), id), patch, { merge: true }));
+  }
+  ops.push((b) => b.set(metaRef, { accountVersion: ACCOUNT_VERSION }, { merge: true }));
+  await commitAll(ops);
+}
+
 async function migrateDebts() {
   const old = await readAll('debts');
   if (!old.length) return;
@@ -232,7 +303,38 @@ async function refresh() {
 
   $('boot').hidden = true;
   $('app').hidden = false;
+  setPrivacy(privacyOn());
   render();
+
+  // 확실한 취소는 묻지 않고 맞문다. 애매한 것만 정리 탭으로 간다.
+  await autoOffset();
+}
+
+/**
+ * 취소 문자를 원래 결제와 맞물린다.
+ *
+ * 취소가 지출 한 건으로 더 쌓이면 쓴 적 없는 돈이 통계에 남고 카드값 예상도
+ * 틀어진다. 같은 카드 · 같은 금액 · 가까운 날짜에 후보가 하나뿐일 때만
+ * 자동으로 처리한다. 같은 가게에서 같은 금액을 두 번 긁는 일은 흔해서,
+ * 엉뚱한 쪽을 지우면 찾기가 더 어려워진다.
+ */
+async function autoOffset() {
+  const open = openCancels(D.txns);
+  if (!open.length) return;
+
+  const ops = [];
+  let done = 0;
+  for (const c of open) {
+    const { match, confident } = findOriginal(c, D.txns);
+    if (!match || !confident) continue;
+    ops.push((b) => b.update(doc(col('txns'), match.id), voidPatch(c)));
+    ops.push((b) => b.update(doc(col('txns'), c.id), settledPatch(match)));
+    done++;
+  }
+  if (!done) return;
+  await commitAll(ops);
+  await refresh();
+  toast(`취소 ${done}건을 원래 결제와 맞물렸어요`);
 }
 
 // ───────────────────────────────────────────────── 그리기
@@ -241,7 +343,7 @@ function render() {
   const L = D.ledger;
   $('monthLabel').textContent = `${L.month} · ${D.settings.cycleStartDay || 1}일 시작`;
 
-  const waiting = L.inbox.pending + L.inbox.unparsed;
+  const waiting = L.inbox.pending + L.inbox.unparsed + openCancels(D.txns).length;
   $('badge').hidden = !waiting;
   $('badge').textContent = waiting > 99 ? '99+' : waiting;
 
@@ -251,6 +353,7 @@ function render() {
   renderFixed();
   renderSetup();
   syncAccountForm();
+  syncGoalForm();
 }
 
 // 미분류는 늘 맨 뒤다. 새로 만든 갈래가 그 뒤로 가면 어색하다.
@@ -284,54 +387,76 @@ function flowRow(name, amount, color, sign) {
   </div>`;
 }
 
+/**
+ * 홈.
+ *
+ * 매일 보는 건 이번 달이지 빚 총액이 아니다. 빚 숫자를 42px 로 맨 위에 두면
+ * 어깨너머로 그대로 보이고, 다 갚고 나면 화면이 텅 빈다. 순서를 뒤집었다 —
+ * 이번 달이 먼저, 목표는 그 아래.
+ */
 function renderHome() {
-  const { debt, planned, budget, assets, inbox } = D.ledger;
+  const { debt, planned, budget, assets, inbox, goal, cards } = D.ledger;
+  const spent = monthSpending(histData(), D.ledger.month);
+  const spentTotal = sumCounted(spent);
+  const prev = sameSpanLastMonth(histData(), D.ledger.month);
+  const run = pace(spentTotal, D.ledger.month, D.settings.cycleStartDay);
   let h = '';
 
-  if (!debt.total) {
-    h += `<div class="card"><div class="empty">아직 등록한 빚이 없어요.<br>
-      설정에서 리볼빙·마이너스통장을 넣으면<br>여기에 남은 금액과 다 갚는 시점이 나와요.</div></div>`;
-  } else {
-    h += `<div class="card">
-      <div class="row"><span class="lbl grow">남은 빚</span>
-      ${debt.daysToTarget !== null ? `<span class="muted">목표까지 D-${Math.max(0, debt.daysToTarget)}</span>` : ''}</div>
-      <div class="big num" style="font-size:42px;color:var(--spend);margin:10px 0 14px">₩${won(debt.total)}</div>
-      <div class="bar"><i style="width:${Math.min(100, debt.progressPct)}%;background:var(--blue)"></i></div>
-      <div class="muted" style="margin-top:7px">
-        <b style="color:var(--blue)">${debt.progressPct}% 갚음</b> · 시작 ₩${won(debt.startAmount)}</div>
-      <div class="hr"></div>`;
+  // ── 이번 달 ────────────────────────────────────────────
+  h += `<div class="card">
+    <div class="row"><span class="lbl grow">이 달에 쓴 돈</span>
+      <span class="muted">${run.dayOf}/${run.days}일</span></div>
+    <div class="big num" style="font-size:38px;color:var(--spend);margin:10px 0 ${budget.limit ? 12 : 8}px">₩${won(spentTotal)}</div>`;
 
-    debt.items.forEach((d, i) => {
-      h += `<div class="row" style="padding:7px 0">
-        <span style="width:3px;height:26px;border-radius:2px;background:${i === 0 ? 'var(--spend)' : '#C9C4B8'}"></span>
-        <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(d.name)}</span><br>
-          <span class="muted">연 ${Number(d.rate) || 0}%${i === 0 && debt.items.length > 1 ? ' · 먼저 갚기' : ''}</span></span>
-        <span class="num" style="font-size:15px;font-weight:600">${won(d.amount)}</span></div>`;
-    });
-    h += '</div>';
-
-    if (!planned.income) {
-      h += `<div class="note warn">매달 들어오는 돈을 아직 안 넣었어요.<br>설정에 넣으면 <b>언제 다 갚는지</b>가 나옵니다.</div>`;
-    } else if (debt.paceMonths === null) {
-      h += `<div class="note warn"><b>지금은 갚을 여력이 없어요.</b><br>
-        고정비나 생활비 예산을 줄이지 않으면 빚이 그대로예요.</div>`;
-    } else if (debt.needPerMonth === null) {
-      h += `<div class="note ok">이 속도면 <b>${debt.paceMonths}개월</b> 걸려요.
-        설정에서 목표 날짜를 정하면 속도가 맞는지 알려드릴게요.</div>`;
-    } else if (debt.onTrack) {
-      h += `<div class="note ok"><b>이 속도면 ${debt.paceMonths}개월 — 목표 안에 끝나요.</b><br>
-        매달 ₩${won(debt.needPerMonth)} 필요, 여력 ₩${won(planned.available)}.</div>`;
-    } else {
-      h += `<div class="note warn"><b>이 속도면 ${debt.paceMonths}개월 — 목표보다 늦어요.</b><br>
-        목표 안에 끝내려면 매달 <b>₩${won(debt.needPerMonth)}</b>을 갚아야 해요.
-        지금 여력은 <b>₩${won(planned.available)}</b>, <b>₩${won(debt.shortfall)}</b> 모자랍니다.</div>`;
-    }
+  if (budget.limit) {
+    h += `<div class="bar"><i style="width:${Math.min(100, budget.usedPct)}%;background:var(--spend)"></i></div>
+      <div class="row" style="margin-top:9px">
+        <span class="grow" style="font-size:13px;color:var(--ink2)">오늘 쓸 수 있는 돈</span>
+        <span class="num" style="font-size:19px;font-weight:700;color:var(--blue)">₩${won(budget.perDay)}</span></div>
+      <div class="muted">예산 ₩<span class="num">${won(budget.limit)}</span> 중 ${budget.usedPct}% · 남은 ${budget.daysLeft}일</div>`;
   }
 
+  if (prev.total > 0) {
+    const gap = spentTotal - prev.total;
+    const pct = Math.round((gap / prev.total) * 100);
+    h += `<div class="note ${gap > 0 ? 'warn' : 'ok'}" style="margin:12px 0 0">
+      ${gap > 0 ? '지난달 같은 기간보다' : '지난달 같은 기간보다'}
+      <b class="num">₩${won(Math.abs(gap))}</b> ${gap > 0 ? '더' : '덜'} 쓰고 있어요 (${pct > 0 ? '+' : ''}${pct}%).<br>
+      이 속도면 이 달은 <b class="num">₩${won(run.projected)}</b>${
+        budget.limit ? ` — 예산보다 <b class="num">₩${won(Math.abs(run.projected - budget.limit))}</b> ${run.projected > budget.limit ? '넘어요' : '적어요'}` : ''}.</div>`;
+  } else if (!budget.limit) {
+    h += `<div class="muted" style="margin-top:4px">설정에서 생활비 예산을 잡으면
+      <b>오늘 쓸 수 있는 돈</b>이 여기 나와요.</div>`;
+  }
+
+  h += `<div class="hr"></div>
+    <button type="button" class="act tint" style="width:100%" data-tab="history">
+      어디에 썼는지 보기 →</button></div>`;
+
+  // ── 다음 카드값 ─────────────────────────────────────────
+  if (cards.total) {
+    h += `<div class="card">
+      <div class="row"><span class="lbl grow">다음 카드값</span>
+        <span class="muted">${cards.items[0].daysLeft}일 뒤</span></div>
+      <div class="big num" style="font-size:30px;color:var(--spend);margin:10px 0 12px">₩${won(cards.total)}</div>`;
+    for (const b of cards.items) {
+      h += `<div class="row" style="padding:6px 0">
+        <span class="grow"><span style="font-size:13px;font-weight:600">${esc(b.name)}</span><br>
+          <span class="muted">${dateLabel(b.payAt)} 출금${b.shifted ? ' (쉬는 날이라 밀림)' : ''}${
+            b.carried ? ` · 리볼빙 <span class="num">${won(b.carried)}</span> 포함` : ''}</span></span>
+        <span class="num" style="font-size:14px;font-weight:600">${won(b.total)}</span></div>`;
+    }
+    h += `<div class="muted" style="margin-top:8px">${esc(dateLabel(cards.items[0].from))} 이후 긁은 것부터 셉니다.</div></div>`;
+  }
+
+  // ── 목표 ───────────────────────────────────────────────
+  h += renderGoal(goal, debt, planned);
+
+  // ── 순자산 ─────────────────────────────────────────────
   if (assets.total || debt.total) {
     h += `<div class="card">
       <div class="row"><span class="lbl grow">순자산</span><span class="muted">가진 돈 − 빚</span></div>
-      <div class="big num" style="font-size:30px;margin:9px 0 12px;color:${assets.net >= 0 ? 'var(--ink)' : 'var(--spend)'}">
+      <div class="big num" style="font-size:28px;margin:9px 0 12px;color:${assets.net >= 0 ? 'var(--ink)' : 'var(--spend)'}">
         ${assets.net < 0 ? '−₩' + won(-assets.net) : '₩' + won(assets.net)}</div>`;
     assets.items.filter((a) => a.balance).forEach((a) => {
       h += `<div class="row" style="padding:5px 0">
@@ -346,71 +471,88 @@ function renderHome() {
     h += '</div>';
   }
 
+  // ── 이번 달 계산 ────────────────────────────────────────
   h += `<div class="card"><div class="lbl" style="margin-bottom:11px">이번 달 계산</div>
     ${flowRow('수입', planned.income, 'var(--blue)', '+')}
     ${flowRow('고정비', planned.fixed, 'var(--spend)', '−')}
     ${flowRow('생활비 예산', planned.variableBudget, 'var(--spend)', '−')}
     <div class="hr"></div>
-    <div class="row"><span class="grow" style="font-size:14px;font-weight:600">빚 갚는 데 쓸 돈</span>
+    <div class="row"><span class="grow" style="font-size:14px;font-weight:600">남는 돈</span>
       <span class="big num" style="font-size:22px;color:${planned.available >= 0 ? 'var(--blue)' : 'var(--spend)'}">${won(planned.available)}</span>
     </div></div>`;
 
-  // 다음 결제일에 얼마 나가는지. 리볼빙 중이면 이걸 모르고는 계획이 안 선다.
-  const bills = D.ledger.cards;
-  if (bills.total) {
-    h += `<div class="card">
-      <div class="row"><span class="lbl grow">다음 카드값</span>
-        <span class="muted">${bills.items[0].daysLeft}일 뒤</span></div>
-      <div class="big num" style="font-size:32px;color:var(--spend);margin:10px 0 12px">₩${won(bills.total)}</div>`;
-    for (const b of bills.items) {
-      h += `<div class="row" style="padding:6px 0">
-        <span class="grow"><span style="font-size:13px;font-weight:600">${esc(b.name)}</span><br>
-          <span class="muted">${dateLabel(b.payAt)} 출금${b.shifted ? ' (쉬는 날이라 밀림)' : ''}${
-            b.carried ? ` · 리볼빙 ${won(b.carried)} 포함` : ''}</span></span>
-        <span class="num" style="font-size:14px;font-weight:600">${won(b.total)}</span></div>`;
-    }
-    h += `<div class="muted" style="margin-top:8px">${esc(dateLabel(bills.items[0].from))} 이후 긁은 것부터 셉니다.</div></div>`;
-  }
-
-  // 쓴 돈은 예산을 잡았든 안 잡았든 늘 보여야 한다. 어디로 갔는지 모르겠다는 게 시작이었다.
-  const spent = monthSpending(histData(), D.ledger.month);
-  const spentTotal = sumCounted(spent);
-  const prev = sameSpanLastMonth(histData(), D.ledger.month);
-  const run = pace(spentTotal, D.ledger.month, D.settings.cycleStartDay);
-  const compare = prev.total > 0
-    ? `지난달 같은 기간 ₩${won(prev.total)} · 이 속도면 이 달은 <b>₩${won(run.projected)}</b>`
-    : '';
-
-  if (budget.limit) {
-    h += `<div class="card">
-      <div class="row"><span class="lbl grow">오늘 쓸 수 있는 돈</span><span class="muted">남은 ${budget.daysLeft}일</span></div>
-      <div class="big num" style="font-size:32px;margin:9px 0 12px">₩${won(budget.perDay)}</div>
-      <div class="bar"><i style="width:${Math.min(100, budget.usedPct)}%;background:var(--spend)"></i></div>
-      <div class="muted" style="margin-top:7px">${budget.usedPct}% 사용 · 쓴 돈 ₩${won(budget.spent)} · 남은 ₩${won(budget.remaining)}</div>
-      ${compare ? `<div class="muted" style="margin-top:6px">${compare}</div>` : ''}
-      <div class="hr"></div>
-      <button type="button" class="act tint" style="width:100%" data-tab="history">
-        이 달에 쓴 ₩${won(spentTotal)}, 어디에 썼는지 보기 →</button>
-    </div>`;
-  } else if (spent.length) {
-    h += `<div class="card">
-      <div class="row"><span class="lbl grow">이 달에 쓴 돈</span><span class="muted">${spent.length}건</span></div>
-      <div class="big num" style="font-size:34px;color:var(--spend);margin:10px 0 7px">₩${won(spentTotal)}</div>
-      ${compare ? `<div class="muted" style="margin-bottom:13px">${compare}</div>` : '<div style="height:6px"></div>'}
-      <button type="button" class="act tint" style="width:100%" data-tab="history">
-        어디에 썼는지 보기 →</button>
-      <div class="muted" style="margin-top:9px">설정에서 생활비 예산을 잡으면
-        <b>오늘 쓸 수 있는 돈</b>이 여기 나와요.</div>
-    </div>`;
-  }
-
-  if (inbox.pending || inbox.unparsed) {
+  const waiting = inbox.pending + inbox.unparsed + openCancels(D.txns).length;
+  if (waiting) {
     h += `<button type="button" class="note warn" data-tab="inbox">
-      정리할 게 있어요 — 분류 안 된 결제 <b>${inbox.pending}건</b>, 못 읽은 문자 <b>${inbox.unparsed}건</b><br>
+      정리할 게 <b>${waiting}건</b> 있어요 — 분류 안 된 결제 ${inbox.pending}건, 못 읽은 문자 ${inbox.unparsed}건<br>
       <span style="text-decoration:underline">정리하러 가기</span></button>`;
   }
 
   $('home').innerHTML = h;
+}
+
+const GOAL_WORD = {
+  payoff: { verb: '갚음', left: '남은 빚', none: '갚을 빚이 없어요' },
+  save: { verb: '모음', left: '더 모아야 할 돈', none: '목표를 다 채웠어요' },
+};
+
+/**
+ * 갚는 것도 모으는 것도 "지금 얼마이고 어디까지 가야 하는가"라는 같은 모양이다.
+ * 빚을 다 갚으면 다음 목표로 넘어갈 수 있어야 홈이 안 빈다.
+ */
+function renderGoal(goal, debt, planned) {
+  if (goal.kind === 'keep') {
+    return `<div class="card"><div class="empty">목표를 아직 안 정했어요.<br>
+      설정에서 <b>빚 갚기</b>나 <b>모으기</b>를 정하면<br>여기에 진행과 언제 끝나는지가 나와요.</div></div>`;
+  }
+  const w = GOAL_WORD[goal.kind];
+  let h = `<div class="card">
+    <div class="row"><span class="lbl grow">${esc(goal.name)}</span>
+      ${goal.daysToTarget !== null ? `<span class="muted">목표까지 D-${Math.max(0, goal.daysToTarget)}</span>` : ''}</div>`;
+
+  if (goal.done) {
+    h += `<div class="big" style="font-size:24px;margin:12px 0 8px;color:var(--blue)">${w.none} 🎉</div>
+      <div class="muted">설정에서 다음 목표를 정해 보세요.</div></div>`;
+    return h;
+  }
+
+  h += `<div class="row" style="margin:10px 0 12px">
+      <span class="grow" style="font-size:12.5px;color:var(--ink2)">${w.left}</span>
+      <span class="big num" style="font-size:30px;color:${goal.kind === 'payoff' ? 'var(--spend)' : 'var(--blue)'}">₩${won(goal.remaining)}</span></div>
+    <div class="bar"><i style="width:${Math.min(100, Math.max(2, goal.pct))}%;background:var(--blue)"></i></div>
+    <div class="muted" style="margin-top:7px">
+      <b style="color:var(--blue)">${goal.pct}% ${w.verb}</b> · 시작 ₩<span class="num">${won(goal.start)}</span>${
+        goal.kind === 'save' ? ` · 목표 ₩<span class="num">${won(goal.target)}</span>` : ''}</div>`;
+
+  if (goal.kind === 'payoff' && debt.items.length) {
+    h += '<div class="hr"></div>';
+    debt.items.forEach((d, i) => {
+      h += `<div class="row" style="padding:7px 0">
+        <span style="width:3px;height:26px;border-radius:2px;background:${i === 0 ? 'var(--spend)' : '#CBD5E1'}"></span>
+        <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(d.name)}</span><br>
+          <span class="muted">연 ${Number(d.rate) || 0}%${i === 0 && debt.items.length > 1 ? ' · 먼저 갚기' : ''}</span></span>
+        <span class="num" style="font-size:15px;font-weight:600">${won(d.amount)}</span></div>`;
+    });
+  }
+  h += '</div>';
+
+  if (!planned.income) {
+    h += `<div class="note warn">매달 들어오는 돈을 아직 안 넣었어요.<br>설정에 넣으면 <b>언제 끝나는지</b>가 나옵니다.</div>`;
+  } else if (goal.paceMonths === null) {
+    h += `<div class="note warn"><b>지금은 여력이 없어요.</b><br>
+      고정비나 생활비 예산을 줄이지 않으면 제자리예요.</div>`;
+  } else if (goal.needPerMonth === null) {
+    h += `<div class="note ok">이 속도면 <b>${goal.paceMonths}개월</b> 걸려요.
+      설정에서 목표 날짜를 정하면 속도가 맞는지 알려드릴게요.</div>`;
+  } else if (goal.onTrack) {
+    h += `<div class="note ok"><b>이 속도면 ${goal.paceMonths}개월 — 목표 안에 끝나요.</b><br>
+      매달 ₩<span class="num">${won(goal.needPerMonth)}</span> 필요, 여력 ₩<span class="num">${won(planned.available)}</span>.</div>`;
+  } else {
+    h += `<div class="note warn"><b>이 속도면 ${goal.paceMonths}개월 — 목표보다 늦어요.</b><br>
+      목표 안에 끝내려면 매달 <b class="num">₩${won(goal.needPerMonth)}</b>이 필요해요.
+      지금 여력은 <b class="num">₩${won(planned.available)}</b>, <b class="num">₩${won(goal.shortfall)}</b> 모자랍니다.</div>`;
+  }
+  return h;
 }
 
 // ───────────────────────────────────────────────── 내역
@@ -446,7 +588,7 @@ function renderHistory() {
   if (prev.total > 0) {
     const pct = Math.round(((total - prev.total) / prev.total) * 100);
     const span = prev.whole ? '지난달' : `지난달 같은 기간`;
-    diff = ` · ${span}(₩${won(prev.total)})보다 <b style="color:${pct > 0 ? 'var(--spend)' : 'var(--blue)'}">`
+    diff = ` · ${span}(₩<span class="num">${won(prev.total)}</span>)보다 <b class="num" style="color:${pct > 0 ? 'var(--spend)' : 'var(--blue)'}">`
          + `${pct > 0 ? '+' : pct < 0 ? '−' : '±'}${Math.abs(pct)}%</b>`;
   }
 
@@ -629,15 +771,48 @@ function renderRules() {
 function renderInbox() {
   const pending = D.txns.filter((t) => t.status === 'pendingCategory' && t.type === 'expense');
   const unparsed = D.raw.filter((r) => !r.parsedOk && !r.txnId);
+  const cancels = openCancels(D.txns);
   let h = '';
 
-  if (!pending.length && !unparsed.length) {
+  if (cancels.length) {
+    h += `<div class="lbl" style="margin:2px 0 9px">어느 결제를 취소한 건가요 · ${cancels.length}건</div>`;
+    for (const c of cancels) {
+      const { candidates } = findOriginal(c, D.txns);
+      h += `<div class="card">
+        <div class="row" style="align-items:flex-start">
+          <span class="grow"><span style="font-size:15px;font-weight:600">취소 — ${esc(c.merchantRaw || '가맹점 미상')}</span><br>
+            <span class="muted">${esc(String(c.occurredAt).replace('T', ' ').slice(5, 16))}${c.cardName ? ' · ' + esc(c.cardName) : ''}</span></span>
+          <span class="big num" style="font-size:22px">${won(c.amount)}</span></div>`;
+
+      if (!candidates.length) {
+        h += `<div class="note warn" style="margin:13px 0 0">같은 금액으로 긁은 결제를 못 찾았어요.<br>
+          원래 결제가 아직 안 들어왔거나, 다른 카드일 수 있어요.</div>
+          <button type="button" class="act ghost" style="width:100%;margin-top:9px"
+            data-dropcancel="${c.id}">이 취소는 치우기</button></div>`;
+        continue;
+      }
+
+      h += `<div class="muted" style="margin:13px 0 7px">맞물릴 결제를 골라 주세요</div>`;
+      for (const o of candidates.slice(0, 5)) {
+        const days = Math.round((new Date(c.occurredAt) - new Date(o.occurredAt)) / 86400000);
+        h += `<button type="button" class="item" style="width:100%;text-align:left;background:none;border-top:0;border-left:0;border-right:0;cursor:pointer"
+          data-offset="${c.id}:${o.id}">
+          <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(o.merchantRaw || '(이름 없음)')}</span><br>
+            <span class="muted">${esc(String(o.occurredAt).slice(5, 10))} · ${days === 0 ? '같은 날' : `${days}일 전`}${o.categoryId ? ' · ' + esc(catName(o.categoryId)) : ''}</span></span>
+          <span class="num" style="font-size:14px;font-weight:600">${won(o.amount)}</span></button>`;
+      }
+      h += `<button type="button" class="act ghost" style="width:100%;margin-top:11px"
+        data-dropcancel="${c.id}">어느 것도 아니에요</button></div>`;
+    }
+  }
+
+  if (!pending.length && !unparsed.length && !cancels.length) {
     $('inbox').innerHTML = `<div class="card"><div class="empty">정리할 게 없어요.<br>분류하지 못한 결제가 생기면 여기에 쌓입니다.</div></div>`;
     return;
   }
 
   if (pending.length) {
-    h += `<div class="lbl" style="margin:2px 0 9px">어디에 쓴 돈인가요 · ${pending.length}건</div>`;
+    h += `<div class="lbl" style="margin:${cancels.length ? 18 : 2}px 0 9px">어디에 쓴 돈인가요 · ${pending.length}건</div>`;
     for (const t of pending) {
       const decision = classify(t.merchantRaw, {
         merchants: D.merchants, rules: D.rules, transactions: D.txns,
@@ -772,7 +947,7 @@ function renderFixed() {
 
   let h = `<div class="card"><div class="lbl">매달 빠져나가는 돈</div>
     <div class="big num" style="font-size:34px;margin:9px 0 6px">₩${won(total)}</div>
-    <div class="muted">1년이면 <b style="color:var(--spend)">₩${won(total * 12)}</b></div></div>`;
+    <div class="muted">1년이면 <b class="num" style="color:var(--spend)">₩${won(total * 12)}</b></div></div>`;
 
   h += '<div class="card">';
   if (!list.length) {
@@ -942,6 +1117,8 @@ function renderSetup() {
 
   const cats = expenseCats();
   $('setup').innerHTML = [
+    fold('goal', '목표',
+      goalSummary(), goalForm()),
     fold('income', '수입과 예산',
       s.monthlyIncome ? `들어옴 ${won(s.monthlyIncome)} · 생활비 ${won(s.variableBudget)}` : '아직 안 넣음', income),
     fold('assets', '가진 돈',
@@ -965,6 +1142,70 @@ function renderSetup() {
  * 설정은 한 번 정해 놓고 잘 안 건드리는 것들이다. 다 펼쳐 두면 스크롤만 길어지고
  * 정작 찾는 게 어디 있는지 안 보인다. 접어 두되, 접힌 채로도 지금 값이 보이게 한다.
  */
+// ───────────────────────────────────────────────── 직접 넣기
+
+/**
+ * 문자가 안 오는 돈은 여기로만 들어온다.
+ *
+ * 현금, 계좌이체, 지인에게 받은 용돈, 카드값 납부. 여태 "읽지 못한 문자"에
+ * 걸려야만 손으로 넣을 수 있었는데, 애초에 문자가 없으면 걸릴 것도 없다.
+ * 어느 화면에서든 누를 수 있어야 실제로 쓴다.
+ */
+const QUICK_LABEL = {
+  expense: { what: '어디에 썼나요', from: '어디서 나갔나요', to: '' },
+  income: { what: '무엇으로 받았나요', from: '', to: '어디로 들어왔나요' },
+  transfer: { what: '무엇을 옮겼나요', from: '어디서 뺐나요', to: '어디로 옮겼나요' },
+};
+
+function quickKind() {
+  return $('sheet')?.querySelector('[name="type"]')?.value || 'expense';
+}
+
+function openQuick(kind = 'expense') {
+  const form = document.querySelector('[data-form="quick"]');
+  form.reset();
+  form.elements.type.value = kind;
+  form.elements.date.value = new Date().toISOString().slice(0, 10);
+  syncQuick();
+  $('sheet').hidden = false;
+  setTimeout(() => form.elements.amount.focus(), 60);
+}
+
+const closeQuick = () => { $('sheet').hidden = true; };
+
+/** 종류마다 묻는 게 다르다. 수입에 "어디서 나갔나요"를 물으면 안 된다. */
+function syncQuick() {
+  const form = document.querySelector('[data-form="quick"]');
+  if (!form) return;
+  const kind = form.elements.type.value;
+
+  for (const b of form.querySelectorAll('[data-kind]')) {
+    if (b.dataset.kind === kind) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  }
+  for (const el of form.querySelectorAll('[data-qwhen]')) {
+    el.hidden = !el.dataset.qwhen.split(' ').includes(kind);
+  }
+
+  $('quickWhatLabel').textContent = QUICK_LABEL[kind].what;
+  if (QUICK_LABEL[kind].from) $('quickFromLabel').textContent = QUICK_LABEL[kind].from;
+  if (QUICK_LABEL[kind].to) $('quickToLabel').textContent = QUICK_LABEL[kind].to;
+
+  const cats = D.categories
+    .filter((c) => !c.hidden && c.kind === (kind === 'income' ? 'income' : 'expense'))
+    .sort(byOrder);
+  form.elements.categoryId.innerHTML = kind === 'income'
+    ? `<option value="">고르지 않음</option>`
+      + cats.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')
+    : catOptions();
+
+  const live = D.accounts.filter((a) => a.active !== false);
+  const opts = (list, none) => `<option value="">${none}</option>`
+    + list.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  form.elements.accountId.innerHTML = opts(live, '안 정함');
+  form.elements.toAccountId.innerHTML = opts(live, '안 정함');
+}
+
 /** 통장에 결제일이 있을 리 없고 카드에 이자율이 있을 리 없다. 쓰는 칸만 보인다. */
 function syncAccountForm() {
   const form = document.querySelector('[data-form="accounts"]');
@@ -973,6 +1214,65 @@ function syncAccountForm() {
   for (const el of form.querySelectorAll('[data-when]')) {
     el.hidden = !el.dataset.when.split(' ').includes(type);
   }
+}
+
+const goalSummary = () => {
+  const g = D.ledger.goal;
+  if (g.kind === 'keep') return '아직 없음';
+  return `${g.name} · ${g.pct}%`;
+};
+
+/**
+ * 목표를 고른다.
+ *
+ * 빚 갚기로만 만들어 두면 다 갚은 다음 날 홈이 텅 빈다. 두 달 뒤가 목표인
+ * 사람에게 두 달짜리 앱을 만들어 줄 수는 없다.
+ */
+function goalForm() {
+  const g = D.settings.goal || {
+    kind: D.ledger.debt.total ? 'payoff' : 'keep',
+    name: '빚 정리',
+    startAmount: D.settings.debtStartAmount || 0,
+    targetAmount: 0,
+    targetDate: D.settings.debtTargetDate || '',
+  };
+  const pick = (v, label, note) =>
+    `<option value="${v}"${g.kind === v ? ' selected' : ''}>${label}${note ? ` — ${note}` : ''}</option>`;
+
+  return `<form data-form="goal">
+    <div class="field"><label>무엇을 할 건가요</label>
+      <select name="kind">
+        ${pick('payoff', '빚 갚기', '0 원까지')}
+        ${pick('save', '모으기', '목표 금액까지')}
+        ${pick('keep', '지켜보기', '목표 없이')}</select></div>
+    <div class="field" data-goalwhen="payoff save"><label>이름</label>
+      <input name="name" value="${esc(g.name || '')}" placeholder="리볼빙 정리 · 비상금 300만원"></div>
+    <div class="fields" data-goalwhen="payoff save">
+      <div class="field"><label data-goalstart>시작 금액</label>
+        <input name="startAmount" inputmode="numeric" value="${won(g.startAmount)}"></div>
+      <div class="field" data-goalwhen="save"><label>목표 금액</label>
+        <input name="targetAmount" inputmode="numeric" value="${won(g.targetAmount)}"></div></div>
+    <div class="field" data-goalwhen="payoff save"><label>언제까지</label>
+      <input name="targetDate" type="date" value="${esc(g.targetDate || '')}"></div>
+    <div class="muted" data-goalwhen="payoff save" style="margin:-4px 0 12px">
+      진행률을 시작 금액에 견줘 보여줍니다. 날짜를 정하면 속도가 맞는지도 알려드려요.</div>
+
+    <div class="hr"></div>
+    <label class="check"><input type="checkbox" name="privacy" ${privacyOn() ? 'checked' : ''}>
+      <span>금액 가리기 — 켜 두면 흐리게 보이고, 위쪽 눈 버튼으로 ${PEEK_SECONDS}초간 볼 수 있어요</span></label>
+    <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
+}
+
+/** 지켜보기를 고르면 금액 칸을 물을 이유가 없다. */
+function syncGoalForm() {
+  const form = document.querySelector('[data-form="goal"]');
+  const kind = form?.elements?.kind?.value;
+  if (!kind) return;
+  for (const el of form.querySelectorAll('[data-goalwhen]')) {
+    el.hidden = !el.dataset.goalwhen.split(' ').includes(kind);
+  }
+  const label = form.querySelector('[data-goalstart]');
+  if (label) label.textContent = kind === 'payoff' ? '시작 금액 (처음 빚)' : '시작 금액 (지금까지 모은 돈)';
 }
 
 function fold(key, title, summary, body) {
@@ -1356,6 +1656,28 @@ document.addEventListener('click', guard(async (e) => {
     return toast('치웠어요');
   }
 
+  const offset = e.target.closest('[data-offset]');
+  if (offset) {
+    const [cancelId, originalId] = offset.dataset.offset.split(':');
+    const c = D.txns.find((t) => t.id === cancelId);
+    const o = D.txns.find((t) => t.id === originalId);
+    if (!c || !o) return;
+    await commitAll([
+      (b) => b.update(doc(col('txns'), o.id), voidPatch(c)),
+      (b) => b.update(doc(col('txns'), c.id), settledPatch(o)),
+    ]);
+    await refresh();
+    return toast(`${o.merchantRaw || '그 결제'} 를 없던 일로 했어요`);
+  }
+
+  const dropCancel = e.target.closest('[data-dropcancel]');
+  if (dropCancel) {
+    await updateDoc(doc(col('txns'), dropCancel.dataset.dropcancel),
+      { status: 'settled', offsetsId: 'none' });
+    await refresh();
+    return toast('치웠어요 — 통계엔 안 들어갑니다');
+  }
+
   const delcat = e.target.closest('[data-delcat]');
   if (delcat) return deleteCategory(delcat.dataset.delcat);
 
@@ -1409,6 +1731,16 @@ document.addEventListener('click', guard(async (e) => {
 
   if (e.target.id === 'pingIngest') return pingIngest();
 
+  if (e.target.id === 'peek') return peek();
+  if (e.target.id === 'quickOpen') return openQuick();
+  if (e.target.closest('[data-close]')) return closeQuick();
+
+  const seg = e.target.closest('[data-kind]');
+  if (seg) {
+    document.querySelector('[data-form="quick"]').elements.type.value = seg.dataset.kind;
+    return syncQuick();
+  }
+
   if (e.target.id === 'refresh') { await refresh(); return toast('새로 불러왔어요'); }
   if (e.target.id === 'signout') return signOut(auth);
 }));
@@ -1438,6 +1770,9 @@ document.addEventListener('change', guard(async (e) => {
 
   if (e.target.name === 'type' && e.target.closest('[data-form="accounts"]')) {
     return syncAccountForm();
+  }
+  if (e.target.name === 'kind' && e.target.closest('[data-form="goal"]')) {
+    return syncGoalForm();
   }
 
   const sel = e.target.closest('[data-recat]');
@@ -1486,6 +1821,32 @@ document.addEventListener('submit', guard(async (e) => {
     return toast('넣었어요');
   }
 
+  if (form.dataset.form === 'quick') {
+    const amount = Math.abs(parseAmount(values.amount) || 0);
+    if (!amount) return toast('금액을 넣어 주세요');
+
+    const kind = values.type || 'expense';
+    const when = values.date
+      ? new Date(`${values.date}T${new Date().toTimeString().slice(0, 8)}`).toISOString()
+      : new Date().toISOString();
+
+    const ref = doc(col('txns'));
+    await setDoc(ref, {
+      id: ref.id, type: kind, amount, currency: 'KRW', occurredAt: when,
+      merchantRaw: String(values.merchantRaw || '').trim(),
+      categoryId: kind === 'transfer' ? 'cat_cardbill' : (values.categoryId || null),
+      accountId: kind === 'income' ? '' : (values.accountId || ''),
+      toAccountId: kind === 'expense' ? '' : (values.toAccountId || ''),
+      // 옮긴 돈은 쓴 돈이 아니다 — 세면 카드값만큼 지출이 부풀어 오른다
+      excludeFromBudget: kind === 'transfer' ? true : values.excludeFromBudget === true,
+      status: (kind !== 'expense' || values.categoryId) ? 'confirmed' : 'pendingCategory',
+      source: 'manual',
+    });
+    closeQuick();
+    await refresh();
+    return toast(`${{ expense: '쓴 돈', income: '받은 돈', transfer: '옮긴 돈' }[kind]} ${won(amount)} 넣었어요`);
+  }
+
   if (form.dataset.txn) {
     const amount = parseAmount(values.amount);
     if (!amount) return toast('금액을 넣어 주세요');
@@ -1496,6 +1857,22 @@ document.addEventListener('submit', guard(async (e) => {
     });
     await refresh();
     return toast('고쳤어요');
+  }
+
+  if (form.dataset.form === 'goal') {
+    setPrivacy(values.privacy === true);
+    const kind = values.kind || 'keep';
+    await setDoc(doc(db, 'users', uid, 'meta', 'settings'), {
+      goal: {
+        kind,
+        name: String(values.name || '').trim() || (kind === 'payoff' ? '빚 정리' : '모으기'),
+        startAmount: parseAmount(values.startAmount) || 0,
+        targetAmount: kind === 'save' ? (parseAmount(values.targetAmount) || 0) : 0,
+        targetDate: values.targetDate || '',
+      },
+    }, { merge: true });
+    await refresh();
+    return toast('저장했어요');
   }
 
   if (form.dataset.form === 'ingestUrl') {

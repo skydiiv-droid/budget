@@ -78,7 +78,33 @@ button.small{font-size:12px;padding:7px 11px;min-height:36px}
   padding:0 4px;border-radius:9px;background:var(--spend);color:#fff;
   font-size:10.5px;font-weight:700;line-height:17px;text-align:center}
 
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:78px;z-index:9;
+/* 금액 가리기 — 병원에서 어깨너머로 보이는 게 문제였다.
+   지우지 않고 흐리는 이유: 숫자가 있다는 건 보이니 화면이 망가진 걸로 오해하지 않는다. */
+body.masked .num, body.masked .big, body.masked .tx-amt,
+body.masked .brk-amt, body.masked .day-sum, body.masked .fold-s{
+  filter:blur(7px);user-select:none;pointer-events:none}
+body.masked .bar>i{filter:blur(4px)}
+
+/* 직접 넣기 — 문자가 안 오는 돈(현금 · 계좌이체 · 용돈)은 여기로만 들어온다 */
+.fab{position:fixed;right:16px;bottom:calc(66px + env(safe-area-inset-bottom));z-index:6;
+  width:54px;height:54px;border-radius:27px;border:0;cursor:pointer;
+  background:var(--blue);color:#fff;font-size:28px;line-height:1;font-weight:300;
+  box-shadow:0 6px 18px rgba(29,111,224,.38)}
+.fab:active{transform:scale(.94)}
+
+.sheet{position:fixed;inset:0;z-index:20;display:flex;align-items:flex-end;justify-content:center}
+.sheet-back{position:absolute;inset:0;background:rgba(16,21,28,.42);backdrop-filter:blur(2px)}
+.sheet-box{position:relative;width:100%;max-width:460px;max-height:88dvh;overflow-y:auto;
+  background:var(--card);border-radius:20px 20px 0 0;padding:18px 16px
+  calc(20px + env(safe-area-inset-bottom));box-shadow:0 -8px 34px rgba(16,21,28,.2)}
+
+.seg{display:flex;gap:4px;padding:4px;background:var(--ground);border-radius:12px}
+.seg button{flex:1;font:inherit;font-size:13px;font-weight:600;min-height:38px;border:0;
+  border-radius:9px;background:none;color:var(--ink3);cursor:pointer}
+.seg button[aria-current="page"]{background:#fff;color:var(--blue);
+  box-shadow:0 1px 3px rgba(16,21,28,.1)}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:78px;z-index:30;
   background:var(--ink);color:#fff;font-size:13px;padding:11px 18px;border-radius:11px;
   box-shadow:0 8px 24px rgba(16,21,28,.22);max-width:92vw}
 .center{min-height:100dvh;display:grid;place-items:center;padding:24px;text-align:center}

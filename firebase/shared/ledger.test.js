@@ -220,3 +220,51 @@ test('1일 시작은 옮길 것이 없다', () => {
   const w = monthWindow('2026-03', 1, { payday: true });
   assert.equal(w.start.getDate(), 1, '달력 월은 비교의 기준이라 흔들리면 안 된다');
 });
+
+// ───────────────────────────────────────────────── 목표
+
+const goal = (g, extra = {}) => run({
+  accounts: [{ id: 'a1', name: '리볼빙', type: 'loan', balance: 2_000_000, rate: 19.9 },
+             { id: 'a2', name: '통장', type: 'savings', balance: 900_000 }, ...(extra.accounts || [])],
+}, { goal: g, ...extra.settings }).goal;
+
+test('갚기 목표는 시작 금액에서 0 으로 간다', () => {
+  const g = goal({ kind: 'payoff', name: '빚 정리', startAmount: 4_000_000 });
+  assert.equal(g.current, 2_000_000);
+  assert.equal(g.moved, 2_000_000);
+  assert.equal(g.pct, 50);
+  assert.equal(g.remaining, 2_000_000);
+});
+
+test('모으기 목표는 0 에서 목표 금액으로 간다', () => {
+  const g = goal({ kind: 'save', name: '비상금', startAmount: 0, targetAmount: 3_000_000 });
+  assert.equal(g.current, 900_000, '가진 돈이 현재값');
+  assert.equal(g.pct, 30);
+  assert.equal(g.remaining, 2_100_000);
+});
+
+test('다 하면 끝난 걸로 표시한다', () => {
+  const g = goal({ kind: 'save', startAmount: 0, targetAmount: 500_000 });
+  assert.equal(g.done, true, '빚 다 갚으면 홈이 텅 비면 안 된다 — 다음 목표로 넘어갈 수 있어야 한다');
+  assert.equal(g.pct, 100);
+});
+
+test('목표를 안 정했으면 지켜보기다', () => {
+  const g = goal({ kind: 'keep' });
+  assert.equal(g.pct, null);
+  assert.equal(g.current, -1_100_000, '순자산을 보여 준다');
+});
+
+test('옛 빚 목표 설정을 그대로 읽는다', () => {
+  const L = run({ accounts: [{ id: 'a1', name: '리볼빙', type: 'loan', balance: 2_000_000 }] },
+                { debtStartAmount: 4_000_000, debtTargetDate: '2026-11-20' });
+  assert.equal(L.goal.kind, 'payoff');
+  assert.equal(L.goal.pct, 50);
+  assert.ok(L.goal.daysToTarget > 0);
+});
+
+test('여력이 없으면 몇 달 걸리는지 말하지 않는다', () => {
+  const g = goal({ kind: 'payoff', startAmount: 4_000_000 },
+                 { settings: { monthlyIncome: 100_000, variableBudget: 500_000 } });
+  assert.equal(g.paceMonths, null, '무한대는 답이 아니다');
+});

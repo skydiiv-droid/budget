@@ -260,7 +260,8 @@ function resync() {
     if (haveAccount[row[0]]) return;
     append_('Account', {
       id: row[0], name: row[1], type: row[2], issuer: row[3],
-      last4: row[4], closingDay: row[5], billingDay: row[6], active: true,
+      last4: row[4], closingDay: row[5], billingDay: row[6],
+      balance: 0, balanceAt: '', active: true,
     });
     added.accounts++;
   });

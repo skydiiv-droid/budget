@@ -29,7 +29,11 @@ function updateByKey_(key, value) {
   const sheet = sheet_('Settings');
   const values = sheet.getDataRange().getValues();
   for (let r = 1; r < values.length; r++) {
-    if (values[r][0] === key) { sheet.getRange(r + 1, 2).setValue(value); return true; }
+    if (values[r][0] === key) {
+      sheet.getRange(r + 1, 2).setValue(value);
+      invalidate_('Settings');
+      return true;
+    }
   }
   return false;
 }
@@ -137,8 +141,23 @@ function ledger(yyyymm) {
     ? Math.round(debtTotal / monthsToTarget) : null;
   const paceMonths = available > 0 ? debtTotal / available : null;
 
+  // ── 자산 ──────────────────────────────────────────────
+  // 카드는 자산이 아니라 아직 안 낸 돈이므로 여기서 세지 않는다.
+  const assets = readAll_('Account')
+    .filter(function (a) { return a.type !== 'card' && a.active !== false; })
+    .map(function (a) { return { id: a.id, name: a.name, type: a.type,
+                                 balance: Number(a.balance || 0), balanceAt: a.balanceAt }; })
+    .sort(function (a, b) { return b.balance - a.balance; });
+
+  const assetTotal = assets.reduce(function (sum, a) { return sum + a.balance; }, 0);
+
   return {
     month: month,
+    assets: {
+      items: assets,
+      total: assetTotal,
+      net: assetTotal - debtTotal,   // 순자산. 빚이 더 크면 음수다
+    },
     planned: {
       income: plannedIncome, fixed: plannedFixed,
       variableBudget: variableBudget, available: available,

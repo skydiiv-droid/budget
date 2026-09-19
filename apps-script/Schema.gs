@@ -26,8 +26,10 @@ const SCHEMA = {
                     'seq', 'kind', 'settled', 'settledTxnId'],
 
   // 계좌와 카드 둘 다 "계정". 카드값은 지출이 아니라 계정 간 이체다.
+  // 계좌·카드·현금·저축. balance 는 지금 남은 돈.
+  // 은행 문자에 잔액이 찍히면 알아서 갱신된다.
   Account: ['id', 'name', 'type', 'issuer', 'last4',
-            'closingDay', 'billingDay', 'active'],
+            'closingDay', 'billingDay', 'balance', 'balanceAt', 'active'],
 
   Category: ['id', 'name', 'parentId', 'kind', 'icon', 'sortOrder'],
 
@@ -84,7 +86,7 @@ function ensureSheets_() {
   });
   // 만든 시트가 곧바로 보이도록 쓰기를 밀어낸다.
   // 이걸 안 하면 방금 만든 시트를 바로 뒤에서 못 찾는 일이 있다.
-  if (made) SpreadsheetApp.flush();
+  if (made) { SpreadsheetApp.flush(); invalidate_(); }
   return made;
 }
 
@@ -132,17 +134,44 @@ function sheet_(name) {
                   ' — 편집기에서 diagnose() 를 실행해 로그를 확인해 주세요.');
 }
 
-/** 시트를 객체 배열로 읽는다. */
+/**
+ * 한 번 실행되는 동안만 살아 있는 캐시.
+ *
+ * 시트 한 번 읽기가 이 앱에서 가장 비싼 일이다. 그런데 대시보드를 한 번
+ * 여는 것만으로 Transaction 전체를 미분류 건수 × 3번씩 읽고 있었다 —
+ * 위치를 보고, 브랜드 낱말을 찾고, 자주 쓴 카테고리를 세느라 각자 읽었다.
+ *
+ * 같은 요청 안에서는 시트가 바뀌지 않으므로 한 번만 읽는다.
+ * 쓰기가 일어난 시트만 비운다.
+ */
+var SHEET_CACHE_ = {};
+
+function invalidate_(name) {
+  if (name) delete SHEET_CACHE_[name];
+  else SHEET_CACHE_ = {};
+}
+
+/**
+ * 시트를 객체 배열로 읽는다.
+ *
+ * 돌려주는 배열은 캐시와 같은 것이다. 부르는 쪽에서 고치면 안 된다 —
+ * 행을 고칠 때는 update_ 를 쓴다.
+ */
 function readAll_(name) {
-  const sheet = sheet_(name);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return [];
-  const headers = values[0];
-  return values.slice(1).map(function (row) {
-    const obj = {};
-    headers.forEach(function (h, i) { obj[h] = row[i]; });
-    return obj;
-  });
+  if (SHEET_CACHE_[name]) return SHEET_CACHE_[name];
+
+  const values = sheet_(name).getDataRange().getValues();
+  let rows = [];
+  if (values.length >= 2) {
+    const headers = values[0];
+    rows = values.slice(1).map(function (row) {
+      const obj = {};
+      headers.forEach(function (h, i) { obj[h] = row[i]; });
+      return obj;
+    });
+  }
+  SHEET_CACHE_[name] = rows;
+  return rows;
 }
 
 /** 객체 하나를 헤더 순서에 맞춰 덧붙인다. */
@@ -153,6 +182,7 @@ function append_(name, obj) {
     const v = obj[h];
     return (v === undefined || v === null) ? '' : v;
   }));
+  invalidate_(name);
   return obj;
 }
 
@@ -168,6 +198,7 @@ function update_(name, id, patch) {
       const c = headers.indexOf(key);
       if (c >= 0) sheet.getRange(r + 1, c + 1).setValue(patch[key]);
     });
+    invalidate_(name);
     return true;
   }
   return false;

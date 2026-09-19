@@ -313,6 +313,14 @@ function buildSchedules_(txn) {
  */
 function recordAnchors_(parsed, rawId) {
   if (parsed.balance !== null && parsed.balance !== undefined) {
+    // 문자에 찍힌 잔액이 가장 최근 사실이다. 계좌 잔액을 그대로 맞춰 둔다.
+    const accountId = accountFor_(parsed.issuer, parsed.cardName);
+    if (accountId) {
+      update_('Account', accountId, {
+        balance: parsed.balance,
+        balanceAt: toIso_(parsed.occurredAt),
+      });
+    }
     append_('Anchor', {
       id: newId_('anc'), at: toIso_(parsed.occurredAt),
       accountId: accountFor_(parsed.issuer, parsed.cardName), kind: 'balance',

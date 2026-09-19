@@ -343,6 +343,7 @@ function forgetRule(payload) {
     if (values[r][sourceCol] !== 'learned') continue;   // 기본 규칙은 남긴다
     sheet.deleteRow(r + 1);
     removed++;
+    invalidate_('Rule');
   }
 
   const merchant = findBy_('Merchant', 'normalizedName', normalizeMerchant_(pattern));

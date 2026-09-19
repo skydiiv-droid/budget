@@ -24,6 +24,7 @@ function apiLoad(token) {
       debtStartDate: setting_('debtStartDate', ''),
       debtTargetDate: setting_('debtTargetDate', ''),
     },
+    accounts: readAll_('Account'),
     categories: readAll_('Category').filter(function (c) { return c.kind === 'expense'; }),
     pending: pendingItems_(),
     unparsed: unparsedItems_(),
@@ -131,6 +132,42 @@ function apiSaveDebt(token, debt) {
   return apiLoad(token);
 }
 
+/** 통장·현금·저축 같은 자산을 더하거나 잔액을 고친다. */
+function apiSaveAccount(token, account) {
+  requireToken_(token);
+  const name = String(account.name || '').trim();
+  if (!name) throw new Error('이름을 적어 주세요');
+
+  const row = {
+    name: name,
+    type: account.type || 'savings',
+    balance: parseAmount_(account.balance) || 0,
+    balanceAt: nowIso_(),
+    active: true,
+  };
+
+  if (account.id && findBy_('Account', 'id', account.id)) {
+    update_('Account', account.id, row);
+    return apiLoad(token);
+  }
+
+  // 같은 이름이 있으면 새로 만들지 않고 잔액만 고친다
+  const same = readAll_('Account').filter(function (a) { return a.name === name; })[0];
+  if (same) update_('Account', same.id, row);
+  else {
+    row.id = newId_('acc');
+    row.issuer = ''; row.last4 = ''; row.closingDay = ''; row.billingDay = '';
+    append_('Account', row);
+  }
+  return apiLoad(token);
+}
+
+function apiDeleteAccount(token, id) {
+  requireToken_(token);
+  deleteRow_('Account', id);
+  return apiLoad(token);
+}
+
 function apiSaveRecurring(token, rule) {
   requireToken_(token);
   const row = {
@@ -155,7 +192,7 @@ function deleteRow_(sheetName, id) {
   const idCol = SCHEMA[sheetName].indexOf('id');
   const values = sheet.getDataRange().getValues();
   for (let r = values.length - 1; r >= 1; r--) {
-    if (values[r][idCol] === id) { sheet.deleteRow(r + 1); return true; }
+    if (values[r][idCol] === id) { sheet.deleteRow(r + 1); invalidate_(sheetName); return true; }
   }
   return false;
 }

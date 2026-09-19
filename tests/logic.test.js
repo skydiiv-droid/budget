@@ -377,6 +377,21 @@ check('여력이 없으면 몇 달 걸리는지 답하지 않는다', () => {
     '0으로 나눠 무한대를 보여주면 안 된다');
 });
 
+check('순자산 = 가진 돈 − 빚', () => {
+  const { ctx } = books({
+    Account: [
+      { id: 'a1', name: '우리은행', type: 'checking', balance: 500000, active: true },
+      { id: 'a2', name: '적금',     type: 'savings',  balance: 1200000, active: true },
+      { id: 'a3', name: '현대카드', type: 'card',     balance: 0, active: true },
+    ],
+    Debt: [{ id: 'd1', name: '리볼빙', balance: 1840000, rate: 17.9 }],
+  });
+  const A = ctx.ledger('2026-09').assets;
+  assert.strictEqual(A.total, 1700000, '카드는 가진 돈이 아니다');
+  assert.strictEqual(A.net, 1700000 - 1840000);
+  assert.ok(A.net < 0, '빚이 더 크면 순자산은 음수다');
+});
+
 check('빚은 이자율이 높은 것이 앞에 온다', () => {
   const { ctx } = books({
     Debt: [

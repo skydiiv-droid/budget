@@ -126,8 +126,10 @@ const SCHEMA = {
                     'seq', 'kind', 'settled', 'settledTxnId'],
 
   // 계좌와 카드 둘 다 "계정". 카드값은 지출이 아니라 계정 간 이체다.
+  // 계좌·카드·현금·저축. balance 는 지금 남은 돈.
+  // 은행 문자에 잔액이 찍히면 알아서 갱신된다.
   Account: ['id', 'name', 'type', 'issuer', 'last4',
-            'closingDay', 'billingDay', 'active'],
+            'closingDay', 'billingDay', 'balance', 'balanceAt', 'active'],
 
   Category: ['id', 'name', 'parentId', 'kind', 'icon', 'sortOrder'],
 
@@ -184,7 +186,7 @@ function ensureSheets_() {
   });
   // 만든 시트가 곧바로 보이도록 쓰기를 밀어낸다.
   // 이걸 안 하면 방금 만든 시트를 바로 뒤에서 못 찾는 일이 있다.
-  if (made) SpreadsheetApp.flush();
+  if (made) { SpreadsheetApp.flush(); invalidate_(); }
   return made;
 }
 
@@ -232,17 +234,44 @@ function sheet_(name) {
                   ' — 편집기에서 diagnose() 를 실행해 로그를 확인해 주세요.');
 }
 
-/** 시트를 객체 배열로 읽는다. */
+/**
+ * 한 번 실행되는 동안만 살아 있는 캐시.
+ *
+ * 시트 한 번 읽기가 이 앱에서 가장 비싼 일이다. 그런데 대시보드를 한 번
+ * 여는 것만으로 Transaction 전체를 미분류 건수 × 3번씩 읽고 있었다 —
+ * 위치를 보고, 브랜드 낱말을 찾고, 자주 쓴 카테고리를 세느라 각자 읽었다.
+ *
+ * 같은 요청 안에서는 시트가 바뀌지 않으므로 한 번만 읽는다.
+ * 쓰기가 일어난 시트만 비운다.
+ */
+var SHEET_CACHE_ = {};
+
+function invalidate_(name) {
+  if (name) delete SHEET_CACHE_[name];
+  else SHEET_CACHE_ = {};
+}
+
+/**
+ * 시트를 객체 배열로 읽는다.
+ *
+ * 돌려주는 배열은 캐시와 같은 것이다. 부르는 쪽에서 고치면 안 된다 —
+ * 행을 고칠 때는 update_ 를 쓴다.
+ */
 function readAll_(name) {
-  const sheet = sheet_(name);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return [];
-  const headers = values[0];
-  return values.slice(1).map(function (row) {
-    const obj = {};
-    headers.forEach(function (h, i) { obj[h] = row[i]; });
-    return obj;
-  });
+  if (SHEET_CACHE_[name]) return SHEET_CACHE_[name];
+
+  const values = sheet_(name).getDataRange().getValues();
+  let rows = [];
+  if (values.length >= 2) {
+    const headers = values[0];
+    rows = values.slice(1).map(function (row) {
+      const obj = {};
+      headers.forEach(function (h, i) { obj[h] = row[i]; });
+      return obj;
+    });
+  }
+  SHEET_CACHE_[name] = rows;
+  return rows;
 }
 
 /** 객체 하나를 헤더 순서에 맞춰 덧붙인다. */
@@ -253,6 +282,7 @@ function append_(name, obj) {
     const v = obj[h];
     return (v === undefined || v === null) ? '' : v;
   }));
+  invalidate_(name);
   return obj;
 }
 
@@ -268,6 +298,7 @@ function update_(name, id, patch) {
       const c = headers.indexOf(key);
       if (c >= 0) sheet.getRange(r + 1, c + 1).setValue(patch[key]);
     });
+    invalidate_(name);
     return true;
   }
   return false;
@@ -545,7 +576,8 @@ function resync() {
     if (haveAccount[row[0]]) return;
     append_('Account', {
       id: row[0], name: row[1], type: row[2], issuer: row[3],
-      last4: row[4], closingDay: row[5], billingDay: row[6], active: true,
+      last4: row[4], closingDay: row[5], billingDay: row[6],
+      balance: 0, balanceAt: '', active: true,
     });
     added.accounts++;
   });
@@ -1278,6 +1310,7 @@ function forgetRule(payload) {
     if (values[r][sourceCol] !== 'learned') continue;   // 기본 규칙은 남긴다
     sheet.deleteRow(r + 1);
     removed++;
+    invalidate_('Rule');
   }
 
   const merchant = findBy_('Merchant', 'normalizedName', normalizeMerchant_(pattern));
@@ -1879,6 +1912,14 @@ function buildSchedules_(txn) {
  */
 function recordAnchors_(parsed, rawId) {
   if (parsed.balance !== null && parsed.balance !== undefined) {
+    // 문자에 찍힌 잔액이 가장 최근 사실이다. 계좌 잔액을 그대로 맞춰 둔다.
+    const accountId = accountFor_(parsed.issuer, parsed.cardName);
+    if (accountId) {
+      update_('Account', accountId, {
+        balance: parsed.balance,
+        balanceAt: toIso_(parsed.occurredAt),
+      });
+    }
     append_('Anchor', {
       id: newId_('anc'), at: toIso_(parsed.occurredAt),
       accountId: accountFor_(parsed.issuer, parsed.cardName), kind: 'balance',
@@ -1980,7 +2021,11 @@ function updateByKey_(key, value) {
   const sheet = sheet_('Settings');
   const values = sheet.getDataRange().getValues();
   for (let r = 1; r < values.length; r++) {
-    if (values[r][0] === key) { sheet.getRange(r + 1, 2).setValue(value); return true; }
+    if (values[r][0] === key) {
+      sheet.getRange(r + 1, 2).setValue(value);
+      invalidate_('Settings');
+      return true;
+    }
   }
   return false;
 }
@@ -2088,8 +2133,23 @@ function ledger(yyyymm) {
     ? Math.round(debtTotal / monthsToTarget) : null;
   const paceMonths = available > 0 ? debtTotal / available : null;
 
+  // ── 자산 ──────────────────────────────────────────────
+  // 카드는 자산이 아니라 아직 안 낸 돈이므로 여기서 세지 않는다.
+  const assets = readAll_('Account')
+    .filter(function (a) { return a.type !== 'card' && a.active !== false; })
+    .map(function (a) { return { id: a.id, name: a.name, type: a.type,
+                                 balance: Number(a.balance || 0), balanceAt: a.balanceAt }; })
+    .sort(function (a, b) { return b.balance - a.balance; });
+
+  const assetTotal = assets.reduce(function (sum, a) { return sum + a.balance; }, 0);
+
   return {
     month: month,
+    assets: {
+      items: assets,
+      total: assetTotal,
+      net: assetTotal - debtTotal,   // 순자산. 빚이 더 크면 음수다
+    },
     planned: {
       income: plannedIncome, fixed: plannedFixed,
       variableBudget: variableBudget, available: available,
@@ -2213,7 +2273,7 @@ button.tiny{font-size:12px;padding:7px 11px;min-height:36px;background:#F2EEE6;
     <div class="grow"><h1>가계부</h1><div class="sub" id="monthLabel">불러오는 중</div></div>
   </div>
 
-  <section id="home"></section>
+  <section id="home"><div class="card"><div class="empty">불러오는 중…</div></div></section>
   <section id="inbox" hidden></section>
   <section id="fixed" hidden></section>
   <section id="setup" hidden></section>
@@ -2244,6 +2304,8 @@ function storeToken(t){
 function forgetToken(){
   try { localStorage.removeItem(STORE_KEY); } catch(e){}
 }
+
+var ASSET_LABEL = { checking: '입출금', savings: '저축 · 투자', cash: '현금' };
 
 function won(n){ return Number(n||0).toLocaleString('ko-KR'); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){
@@ -2354,6 +2416,28 @@ function renderHome(){
         +  '목표 안에 끝내려면 매달 <b>₩' + won(debt.needPerMonth) + '</b>을 갚아야 해요. '
         +  '지금 여력은 <b>₩' + won(p.available) + '</b>, <b>₩' + won(debt.shortfall) + '</b> 모자랍니다.</div>';
     }
+  }
+
+  var A = L.assets || { items: [], total: 0, net: 0 };
+  if (A.total || debt.total){
+    h += '<div class="card"><div class="row"><span class="lbl grow">순자산</span>'
+      +  '<span class="muted">가진 돈 − 빚</span></div>'
+      +  '<div class="big num" style="font-size:30px;margin:9px 0 12px;color:'
+      +  (A.net >= 0 ? 'var(--ink)' : 'var(--debt)') + '">'
+      +  (A.net < 0 ? '−₩' + won(-A.net) : '₩' + won(A.net)) + '</div>';
+    A.items.filter(function(a){ return a.balance; }).forEach(function(a){
+      h += '<div class="row" style="padding:5px 0"><span class="grow" '
+        +  'style="font-size:13px;color:var(--ink2)">' + esc(a.name) + '</span>'
+        +  '<span class="num" style="font-size:13.5px;font-weight:600;color:var(--flow)">'
+        +  won(a.balance) + '</span></div>';
+    });
+    if (debt.total){
+      h += '<div class="row" style="padding:5px 0"><span class="grow" '
+        +  'style="font-size:13px;color:var(--ink2)">빚</span>'
+        +  '<span class="num" style="font-size:13.5px;font-weight:600;color:var(--debt)">− '
+        +  won(debt.total) + '</span></div>';
+    }
+    h += '</div>';
   }
 
   h += '<div class="card"><div class="lbl" style="margin-bottom:11px">이번 달 계획</div>'
@@ -2561,6 +2645,37 @@ function renderSetup(){
     + '<button type="submit" class="act primary" style="width:100%">저장</button>'
     + '<div class="muted" style="margin-top:10px">이자율을 넣으면 비싼 빚부터 갚으라고 홈에서 알려줍니다.</div></form>';
 
+  var assets = (D.accounts || []).filter(function(a){ return a.type !== 'card'; });
+  h += '<div class="card"><div class="lbl" style="margin-bottom:6px">가진 돈</div>'
+    + '<div class="muted" style="margin-bottom:10px">통장 잔고는 입출금 문자가 올 때마다 '
+    + '알아서 맞춰집니다. 저축·투자는 직접 넣어 주세요.</div>';
+  if (!assets.length){
+    h += '<div class="empty">아직 없어요.</div>';
+  } else {
+    assets.forEach(function(a){
+      h += '<div class="item"><span class="grow">'
+        +  '<span style="font-size:13.5px;font-weight:600">' + esc(a.name) + '</span>'
+        +  '<br><span class="muted">' + esc(ASSET_LABEL[a.type] || a.type)
+        +  (a.balanceAt ? ' · ' + esc(String(a.balanceAt).slice(5,10)) + ' 기준' : '') + '</span></span>'
+        +  '<span class="num" style="font-size:14px;font-weight:600">' + won(a.balance) + '</span>'
+        +  '<button type="button" class="act danger" data-del-acc="' + esc(a.id) + '">삭제</button></div>';
+    });
+  }
+  h += '</div>';
+
+  h += '<form class="card" id="accForm"><div class="lbl" style="margin-bottom:12px">가진 돈 추가 · 고치기</div>'
+    + '<div class="muted" style="margin:-6px 0 12px">같은 이름으로 다시 넣으면 잔액이 바뀝니다.</div>'
+    + '<div class="field"><label for="aName">이름</label>'
+    + '<input id="aName" name="name" placeholder="우리은행 · 청약 · 적금" required></div>'
+    + '<div class="fields"><div class="field"><label for="aBal">잔액</label>'
+    + '<input id="aBal" name="balance" inputmode="numeric" placeholder="500,000" required></div>'
+    + '<div class="field"><label for="aType">종류</label><select id="aType" name="type">'
+    + '<option value="checking">입출금</option>'
+    + '<option value="savings">저축 · 투자</option>'
+    + '<option value="cash">현금</option>'
+    + '</select></div></div>'
+    + '<button type="submit" class="act primary" style="width:100%">저장</button></form>';
+
   h += '<form class="card" id="tokenForm"><div class="lbl" style="margin-bottom:6px">토큰 바꾸기</div>'
     + '<div class="muted" style="margin-bottom:12px">외우기 쉬운 문장으로 바꿔도 됩니다. '
     + '8자 이상, 공백과 <b>&amp; ? # % + /</b> 는 쓸 수 없어요.</div>'
@@ -2622,6 +2737,8 @@ document.addEventListener('click', function(e){
     showUnlock('토큰을 지웠어요.');
     return;
   }
+  var da = e.target.closest('[data-del-acc]');
+  if (da && confirm('지울까요?')) { call('apiDeleteAccount', da.dataset.delAcc); return; }
   var dd = e.target.closest('[data-del-debt]');
   if (dd && confirm('지울까요?')) { call('apiDeleteDebt', dd.dataset.delDebt); return; }
   var dr = e.target.closest('[data-del-rec]');
@@ -2661,6 +2778,7 @@ document.addEventListener('submit', function(e){
   }
   if (f.id === 'setForm') call('apiSaveSettings', formData(f));
   else if (f.id === 'debtForm') call('apiSaveDebt', formData(f));
+  else if (f.id === 'accForm') call('apiSaveAccount', formData(f));
   else if (f.id === 'recForm') call('apiSaveRecurring', formData(f));
 });
 
@@ -2697,6 +2815,7 @@ function apiLoad(token) {
       debtStartDate: setting_('debtStartDate', ''),
       debtTargetDate: setting_('debtTargetDate', ''),
     },
+    accounts: readAll_('Account'),
     categories: readAll_('Category').filter(function (c) { return c.kind === 'expense'; }),
     pending: pendingItems_(),
     unparsed: unparsedItems_(),
@@ -2804,6 +2923,42 @@ function apiSaveDebt(token, debt) {
   return apiLoad(token);
 }
 
+/** 통장·현금·저축 같은 자산을 더하거나 잔액을 고친다. */
+function apiSaveAccount(token, account) {
+  requireToken_(token);
+  const name = String(account.name || '').trim();
+  if (!name) throw new Error('이름을 적어 주세요');
+
+  const row = {
+    name: name,
+    type: account.type || 'savings',
+    balance: parseAmount_(account.balance) || 0,
+    balanceAt: nowIso_(),
+    active: true,
+  };
+
+  if (account.id && findBy_('Account', 'id', account.id)) {
+    update_('Account', account.id, row);
+    return apiLoad(token);
+  }
+
+  // 같은 이름이 있으면 새로 만들지 않고 잔액만 고친다
+  const same = readAll_('Account').filter(function (a) { return a.name === name; })[0];
+  if (same) update_('Account', same.id, row);
+  else {
+    row.id = newId_('acc');
+    row.issuer = ''; row.last4 = ''; row.closingDay = ''; row.billingDay = '';
+    append_('Account', row);
+  }
+  return apiLoad(token);
+}
+
+function apiDeleteAccount(token, id) {
+  requireToken_(token);
+  deleteRow_('Account', id);
+  return apiLoad(token);
+}
+
 function apiSaveRecurring(token, rule) {
   requireToken_(token);
   const row = {
@@ -2828,7 +2983,7 @@ function deleteRow_(sheetName, id) {
   const idCol = SCHEMA[sheetName].indexOf('id');
   const values = sheet.getDataRange().getValues();
   for (let r = values.length - 1; r >= 1; r--) {
-    if (values[r][idCol] === id) { sheet.deleteRow(r + 1); return true; }
+    if (values[r][idCol] === id) { sheet.deleteRow(r + 1); invalidate_(sheetName); return true; }
   }
   return false;
 }

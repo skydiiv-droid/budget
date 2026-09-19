@@ -11,12 +11,15 @@ const SCHEMA = {
                'parserVersion', 'parsedOk', 'parseNote', 'txnId', 'ingestedAt'],
 
   // 거래 1건 = "무엇을 언제 샀나". 금액은 전액(할부여도 전액).
+  // lat/lon은 결제 직후 문자가 오므로 사실상 가맹점 좌표다.
+  // 가맹점명이 "네이버파이낸셜"로 뭉개져도 좌표는 안 뭉개진다.
   Transaction: ['id', 'type', 'amount', 'currency', 'occurredAt',
-                'accountId', 'counterAccountId', 'categoryId', 'tags',
+                'accountId', 'counterAccountId', 'categoryId',
                 'merchantRaw', 'merchantId', 'memo',
                 'payMethod', 'installmentMonths',
                 'status', 'voidsTxnId', 'voidedByTxnId',
-                'source', 'rawMessageId', 'dedupeKey', 'excludeFromBudget'],
+                'source', 'rawMessageId', 'dedupeKey', 'excludeFromBudget',
+                'lat', 'lon', 'placeName', 'settlementId'],
 
   // 청구 스케줄 = "언제 얼마가 나가나". 일시불 1건, 3개월 할부 3건, 리볼빙은 매달 재생성.
   PaymentSchedule: ['id', 'txnId', 'accountId', 'dueDate', 'amount',
@@ -27,7 +30,12 @@ const SCHEMA = {
             'closingDay', 'billingDay', 'active'],
 
   Category: ['id', 'name', 'parentId', 'kind', 'icon', 'sortOrder'],
-  Tag: ['id', 'name'],
+
+  // 더치페이 정산. 지출 1건 <- 회수 입금 N건.
+  // 보내는 사람마다 금액이 달라서(23,450 요청에 23,500/24,000) 허용 오차로 닫는다.
+  Settlement: ['id', 'txnId', 'expectedAmount', 'receivedAmount', 'tolerance',
+               'status', 'note', 'createdAt', 'closedAt'],
+  SettlementLink: ['id', 'settlementId', 'incomeTxnId', 'amount', 'linkedAt', 'note'],
 
   Merchant: ['id', 'normalizedName', 'displayName', 'defaultCategoryId',
              'isPassthrough', 'alwaysAsk', 'aliases', 'hitCount'],
@@ -58,7 +66,6 @@ function setup() {
     sheet.setFrozenRows(1);
   });
   seedCategories_();
-  seedTags_();
   seedAccounts_();
   SpreadsheetApp.getActiveSpreadsheet().toast('시트 준비 완료');
 }

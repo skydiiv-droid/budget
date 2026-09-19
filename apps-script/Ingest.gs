@@ -15,6 +15,12 @@ function ingest(payload) {
   const sender = String(payload.sender || '');
   const receivedAt = payload.receivedAt ? new Date(payload.receivedAt) : new Date();
 
+  // 결제 직후에 문자가 오므로 이 좌표는 사실상 가맹점 위치다.
+  // 지하/실내에서는 못 잡을 수 있어 없어도 그대로 진행한다.
+  const location = (payload.lat !== undefined && payload.lat !== null && payload.lat !== '')
+    ? { lat: Number(payload.lat), lon: Number(payload.lon), placeName: payload.placeName || '' }
+    : null;
+
   if (!body.trim()) return { status: 'ignored', reason: 'empty-body' };
 
   // [2] 중복 — 단축어가 같은 문자를 두 번 넘기는 경우가 있다
@@ -58,9 +64,9 @@ function ingest(payload) {
   }
 
   // [4] 거래 생성
-  const txn = buildTransaction_(parsed, rawId);
+  const txn = buildTransaction_(parsed, rawId, location);
   const decision = txn.type === 'expense'
-    ? classify_(parsed.merchantRaw, parsed.amount)
+    ? classify_(parsed.merchantRaw, parsed.amount, location)
     : { categoryId: txn.categoryId, reason: 'fixed' };
 
   txn.categoryId = decision.categoryId || '';
@@ -73,7 +79,7 @@ function ingest(payload) {
   buildSchedules_(txn).forEach(function (s) { append_('PaymentSchedule', s); });
 
   // [7] 단축어 응답
-  return {
+  const response = {
     status: txn.categoryId ? 'categorized' : 'uncategorized',
     txnId: txn.id,
     merchant: parsed.merchantRaw || '(가맹점 미상)',
@@ -82,11 +88,47 @@ function ingest(payload) {
     categoryId: txn.categoryId,
     confidence: parsed.confidence,
     layer: parsed.layer,
-    suggestions: topCategories_(3),
+    reason: decision.reason,
+    placeName: location ? location.placeName : '',
+    suggestions: suggestionsFor_(decision),
   };
+
+  // 입금이면 열려 있는 더치페이 정산 후보를 함께 돌려준다.
+  // 23,450 요청에 23,500이 들어와도 붙일 수 있게 오차를 허용해 고른다.
+  if (txn.type === 'income') {
+    const candidates = suggestSettlements_(parsed.amount);
+    if (candidates.length) {
+      response.status = 'settlement_candidate';
+      response.settlements = candidates;
+    }
+  }
+
+  return response;
 }
 
-function buildTransaction_(parsed, rawId) {
+/**
+ * 알림 메뉴에 올릴 후보.
+ * 위치로 짚이는 게 있으면 그걸 맨 앞에 놓는다 — 같은 자리에서 쓴 적이 있다는 뜻이라
+ * 빈도 상위 카테고리보다 맞을 확률이 높다.
+ */
+function suggestionsFor_(decision) {
+  const top = topCategories_(3);
+  const nearby = decision && decision.nearby;
+  if (!nearby || !nearby.categoryId) return top;
+
+  const hinted = findBy_('Category', 'id', nearby.categoryId);
+  if (!hinted) return top;
+
+  const rest = top.filter(function (c) { return c.id !== nearby.categoryId; });
+  return [{
+    id: hinted.id,
+    name: hinted.name,
+    icon: hinted.icon,
+    hint: '같은 자리에서 ' + nearby.samples + '번',
+  }].concat(rest).slice(0, 3);
+}
+
+function buildTransaction_(parsed, rawId, location) {
   const accountId = accountFor_(parsed.issuer);
   const txn = {
     id: newId_('txn'),
@@ -97,7 +139,6 @@ function buildTransaction_(parsed, rawId) {
     accountId: accountId,
     counterAccountId: '',
     categoryId: '',
-    tags: '',
     merchantRaw: parsed.merchantRaw || '',
     merchantId: '',
     memo: '',
@@ -110,6 +151,10 @@ function buildTransaction_(parsed, rawId) {
     rawMessageId: rawId,
     dedupeKey: '',
     excludeFromBudget: false,
+    lat: location ? location.lat : '',
+    lon: location ? location.lon : '',
+    placeName: location ? location.placeName : '',
+    settlementId: '',
   };
 
   if (parsed.kind === 'deposit') {

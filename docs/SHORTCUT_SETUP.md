@@ -18,7 +18,8 @@
 단축어 앱 > 새 단축어. 이름: `가계부 수집`
 
 ```
-1. URL의 내용 가져오기
+1. 현재 위치 가져오기               ← 선택. 빼면 위치 자동분류만 꺼진다
+2. URL의 내용 가져오기
      URL      : <웹 앱 배포 URL>
      방식     : POST
      본문     : JSON
@@ -26,19 +27,31 @@
        action     : ingest
        body       : [단축어 입력]        ← 문자 본문
        sender     : (비워도 됨)
+       lat        : [현재 위치 > 위도]
+       lon        : [현재 위치 > 경도]
      헤더     : Content-Type = application/json
 
-2. 사전 설정 (If)  —  "URL의 내용 가져오기" 의 status 값
-     status 가 uncategorized 이면
-       3. 메뉴에서 선택
+3. 사전 설정 (If)  —  응답의 status 값
+     uncategorized 이면
+       4. 메뉴에서 선택
             [suggestions 1] [suggestions 2] [suggestions 3] [직접 입력] [나중에]
-       4. 선택 결과로 다시 URL의 내용 가져오기
+       5. 고른 값으로 다시 URL의 내용 가져오기
             action     : categorize
-            txnId      : 1번 응답의 txnId
+            txnId      : 2번 응답의 txnId
             categoryId : 고른 카테고리 id
+
+     settlement_candidate 이면        ← 더치페이 회수 입금으로 보이는 돈
+       4. 메뉴에서 선택
+            [settlements 1] [settlements 2] [그냥 수입]
+       5. action : splitLink
+            settlementId / incomeTxnId
+
      그 외 (categorized / ignored / duplicate)
        아무것도 하지 않음          ← 알림 0개. 이게 핵심이다
 ```
+
+`suggestions` 의 첫 번째 항목에는 `hint` 가 붙어 있을 수 있다
+(`같은 자리에서 4번`). 위치로 짚은 후보라 그냥 빈도 상위보다 맞을 확률이 높다.
 
 자동 분류에 성공하면 **알림이 뜨지 않는다.** 조용히 기록된다.
 하루 8건 결제해도 실제로 뜨는 알림은 1~3개로 유지된다.
@@ -54,7 +67,17 @@
 
 카드용·은행용으로 자동화를 **두 개** 만든다.
 
-## 4. 대시보드 홈 화면에 추가
+## 4. 위치 권한
+
+설정 > 개인정보 보호 및 보안 > 위치 서비스 > **단축어** → **항상**
+
+`앱을 사용하는 동안`으로 두면 백그라운드 자동화에서 좌표를 못 가져온다.
+위치를 넘기지 않아도 나머지는 전부 정상 동작하고, 위치 기반 자동분류만 꺼진다.
+
+좌표는 네 구글 드라이브의 시트에 쌓인다. **동선 기록이 남는다는 뜻**이므로
+원치 않으면 1번 액션만 빼면 된다.
+
+## 5. 대시보드 홈 화면에 추가
 
 Safari에서 `<웹 앱 URL>?token=<INGEST_TOKEN>` 을 열고
 공유 > 홈 화면에 추가. 아이콘이 생기고 주소창 없이 앱처럼 열린다.

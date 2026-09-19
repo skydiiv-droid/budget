@@ -3,6 +3,6 @@
   "private": true,
   "description": "현대카드/우리은행 문자 기반 자동 가계부",
   "scripts": {
-    "test": "node tests/parser.test.js"
+    "test": "node tests/parser.test.js && node tests/logic.test.js"
   }
 }

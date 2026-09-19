@@ -1,10 +1,12 @@
 /**
  * 웹앱 진입점.
  *
- *   POST  {action:"ingest",    token, body, sender, receivedAt}
- *   POST  {action:"categorize",token, txnId, categoryId}
- *   POST  {action:"manual",    token, amount, categoryId, memo, occurredAt}
- *   GET   ?token=...            -> 대시보드 (M3)
+ *   POST  {action:"ingest",     token, body, sender, receivedAt, lat, lon, placeName}
+ *   POST  {action:"categorize", token, txnId, categoryId}
+ *   POST  {action:"manual",     token, amount, categoryId, memo, occurredAt}
+ *   POST  {action:"split",      token, txnId, headcount | expectedAmount}
+ *   POST  {action:"splitLink",  token, settlementId, incomeTxnId}
+ *   GET   ?token=...             -> 대시보드 (M3)
  *
  * 배포: 배포 > 새 배포 > 웹 앱
  *   실행 주체 = 나,  액세스 권한 = 모든 사용자
@@ -37,6 +39,10 @@ function doPost(e) {
         return jsonResponse_(categorize(payload));
       case 'manual':
         return jsonResponse_(manualEntry(payload));
+      case 'split':
+        return jsonResponse_(openSettlement(payload));
+      case 'splitLink':
+        return jsonResponse_(linkSettlement(payload));
       default:
         return jsonResponse_({ status: 'error', reason: 'unknown-action' });
     }
@@ -57,6 +63,10 @@ function doGet(e) {
   const pending = txns.filter(function (t) { return t.status === 'pendingCategory'; });
   const failed = raw.filter(function (r) { return r.parsedOk !== true; });
   const last = raw.length ? raw[raw.length - 1].receivedAt : '없음';
+  const openSplits = readAll_('Settlement').filter(function (s) { return s.status === 'open'; });
+  const outstanding = openSplits.reduce(function (sum, s) {
+    return sum + (Number(s.expectedAmount) - Number(s.receivedAmount || 0));
+  }, 0);
 
   return HtmlService.createHtmlOutput(
     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
@@ -66,6 +76,8 @@ function doGet(e) {
     '<p>거래 <b>' + txns.length + '</b>건</p>' +
     '<p>미분류 <b>' + pending.length + '</b>건</p>' +
     '<p>해석 실패 <b>' + failed.length + '</b>건</p>' +
+    '<p>미회수 더치페이 <b>' + openSplits.length + '</b>건 · ' +
+        outstanding.toLocaleString() + '원</p>' +
     '<p>마지막 수신 <b>' + last + '</b></p>' +
     '</div>'
   );
@@ -95,7 +107,6 @@ function manualEntry(payload) {
     accountId: payload.accountId || 'acc_cash',
     counterAccountId: '',
     categoryId: payload.categoryId || '',
-    tags: payload.tags || '',
     merchantRaw: payload.merchant || '',
     merchantId: '',
     memo: payload.memo || '',
@@ -108,6 +119,10 @@ function manualEntry(payload) {
     rawMessageId: '',
     dedupeKey: '',
     excludeFromBudget: false,
+    lat: payload.lat || '',
+    lon: payload.lon || '',
+    placeName: payload.placeName || '',
+    settlementId: '',
   };
   append_('Transaction', txn);
   return { status: 'ok', txnId: txn.id };

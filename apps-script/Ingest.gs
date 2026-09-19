@@ -149,7 +149,7 @@ function suggestionsFor_(decision) {
 }
 
 function buildTransaction_(parsed, rawId, location) {
-  const accountId = accountFor_(parsed.issuer);
+  const accountId = accountFor_(parsed.issuer, parsed.cardName);
   const txn = {
     id: newId_('txn'),
     type: 'expense',
@@ -188,7 +188,7 @@ function buildTransaction_(parsed, rawId, location) {
     // 이걸 지출로 잡으면 매달 카드값만큼 지출이 부풀어 오른다.
     if (isCardBill_(parsed.merchantRaw)) {
       txn.type = 'transfer';
-      txn.counterAccountId = 'acc_hyundai';
+      txn.counterAccountId = cardAccountForBill_(parsed.amount, txn.occurredAt);
       txn.categoryId = 'cat_cardbill';
       txn.excludeFromBudget = true;
     } else if (isAtm_(parsed.merchantRaw)) {
@@ -203,6 +203,37 @@ function buildTransaction_(parsed, rawId, location) {
   return txn;   // approval -> expense
 }
 
+/**
+ * 카드 대금이 빠져나갈 때 어느 카드 것인지 고른다.
+ *
+ * 은행 문자에는 적요가 "현대카드"로만 찍혀 카드를 알 수 없다. 그래서 카드마다
+ * 이번 청구 예정액을 더해 보고 빠져나간 금액에 가장 가까운 쪽을 고른다.
+ * 카드가 한 장이면 그냥 그 카드다.
+ */
+function cardAccountForBill_(amount, occurredAt) {
+  const cards = readAll_('Account').filter(function (a) { return a.type === 'card'; });
+  if (!cards.length) return '';
+  if (cards.length === 1) return cards[0].id;
+
+  const month = String(occurredAt || '').slice(0, 7);   // yyyy-MM
+  const dueByCard = {};
+  readAll_('PaymentSchedule').forEach(function (sch) {
+    if (sch.settled === true || sch.settled === 'TRUE') return;
+    if (String(sch.dueDate || '').slice(0, 7) !== month) return;
+    dueByCard[sch.accountId] = (dueByCard[sch.accountId] || 0) + Number(sch.amount || 0);
+  });
+
+  let best = cards[0].id;
+  let bestGap = Infinity;
+  cards.forEach(function (card) {
+    const due = dueByCard[card.id];
+    if (due === undefined) return;            // 청구 예정이 없는 카드는 후보가 아니다
+    const gap = Math.abs(due - Number(amount || 0));
+    if (gap < bestGap) { bestGap = gap; best = card.id; }
+  });
+  return best;
+}
+
 function isCardBill_(merchantRaw) {
   return /현대\s*카드|카드\s*대금|일시불대금/.test(String(merchantRaw || ''));
 }
@@ -211,10 +242,29 @@ function isAtm_(merchantRaw) {
   return /ATM|CD기|현금인출/i.test(String(merchantRaw || ''));
 }
 
-function accountFor_(issuer) {
-  if (issuer === '현대카드') return 'acc_hyundai';
+/**
+ * 어느 계정의 거래인지 가린다.
+ *
+ * 카드가 여러 장이면 상품명으로 찾는다. 못 찾으면 그 발급사의 첫 카드로
+ * 떨어뜨린다 — 금액을 잃는 것보다 계정이 틀린 편이 낫고, 나중에 고칠 수 있다.
+ */
+function accountFor_(issuer, cardName) {
   if (issuer === '우리은행') return 'acc_woori';
-  return '';
+  if (issuer !== '현대카드') return '';
+
+  const cards = readAll_('Account').filter(function (a) {
+    return a.type === 'card' && a.issuer === '현대카드';
+  });
+  if (!cards.length) return '';
+
+  const wanted = normalizeMerchant_(cardName || '');
+  if (wanted) {
+    const matched = cards.filter(function (a) {
+      return normalizeMerchant_(a.name).indexOf(wanted) >= 0;
+    })[0];
+    if (matched) return matched.id;
+  }
+  return cards[0].id;
 }
 
 /**
@@ -264,7 +314,7 @@ function recordAnchors_(parsed, rawId) {
   if (parsed.balance !== null && parsed.balance !== undefined) {
     append_('Anchor', {
       id: newId_('anc'), at: toIso_(parsed.occurredAt),
-      accountId: accountFor_(parsed.issuer), kind: 'balance',
+      accountId: accountFor_(parsed.issuer, parsed.cardName), kind: 'balance',
       reported: parsed.balance, computed: '', diff: '',
       status: 'pending', rawMessageId: rawId,
     });
@@ -272,7 +322,7 @@ function recordAnchors_(parsed, rawId) {
   if (parsed.cumulative !== null && parsed.cumulative !== undefined) {
     append_('Anchor', {
       id: newId_('anc'), at: toIso_(parsed.occurredAt),
-      accountId: accountFor_(parsed.issuer), kind: 'cumulative',
+      accountId: accountFor_(parsed.issuer, parsed.cardName), kind: 'cumulative',
       reported: parsed.cumulative, computed: '', diff: '',
       status: 'pending', rawMessageId: rawId,
     });

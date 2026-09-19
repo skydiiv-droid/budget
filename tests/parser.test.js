@@ -149,6 +149,23 @@ check('[실물] 가맹점은 금액 덩어리도 본인 이름도 아니다', ()
     '"누적1,234,567원"이나 "홍*동"을 가맹점으로 잡으면 안 된다');
 });
 
+check('[실물] 카드 상품명을 뽑아낸다', () => {
+  assert.strictEqual(parse(REAL_HYUNDAI_APPROVAL, '').cardName, '이마트Plus');
+});
+
+check('[실물] 다른 카드도 상품명으로 갈린다', () => {
+  const r = parse(['[Web발신]', '현대 미래에셋 승인', '홍*동', '9,900원 일시불',
+                   '09/20 08:30', '메가커피화곡', '누적120,000원'].join('\n'), '');
+  assert.strictEqual(r.cardName, '미래에셋', '카드마다 누적이 따로 오므로 갈라야 한다');
+  assert.strictEqual(r.issuer, '현대카드');
+  assert.strictEqual(r.amount, 9900);
+  assert.strictEqual(r.cumulative, 120000);
+});
+
+check('카드 문자가 아니면 상품명은 비어 있다', () => {
+  assert.strictEqual(parse(REAL_WOORI_DEPOSIT, '').cardName, '');
+});
+
 check('"원"이 붙은 소액도 금액으로 읽는다', () => {
   const r = parse('[현대카드] 09/15 12:34 승인 50원 일시불 테스트', '15771234');
   assert.strictEqual(r.amount, 50, '세 자리 미만이라고 버리면 안 된다');

@@ -241,6 +241,50 @@ check('이미 분류한 건은 새 규칙이 덮어쓰지 않는다', () => {
     '일부러 다르게 넣었을 수 있다');
 });
 
+console.log('\n카드 두 장 가르기');
+
+function cards(extra) {
+  const store = createStore({
+    Account: [
+      { id: 'acc_woori',    name: '우리은행',        type: 'checking', issuer: '우리은행' },
+      { id: 'acc_hd_emart', name: '현대 이마트Plus', type: 'card',     issuer: '현대카드' },
+      { id: 'acc_hd_mirae', name: '현대 미래에셋',   type: 'card',     issuer: '현대카드' },
+    ],
+    ...extra,
+  });
+  const ctx = load(['Config.gs', 'Util.gs', 'Classify.gs', 'Menu.gs',
+                    'Settlement.gs', 'Ingest.gs'], store);
+  return { ctx, store };
+}
+
+check('카드 상품명으로 계정을 고른다', () => {
+  const { ctx } = cards();
+  assert.strictEqual(ctx.accountFor_('현대카드', '이마트Plus'), 'acc_hd_emart');
+  assert.strictEqual(ctx.accountFor_('현대카드', '미래에셋'), 'acc_hd_mirae');
+});
+
+check('상품명을 못 읽어도 금액을 잃지 않는다', () => {
+  const { ctx } = cards();
+  assert.strictEqual(ctx.accountFor_('현대카드', ''), 'acc_hd_emart',
+    '계정이 틀린 편이 기록이 사라지는 것보다 낫다');
+});
+
+check('카드값 출금은 청구 예정액이 가까운 카드로 붙는다', () => {
+  const { ctx } = cards({
+    PaymentSchedule: [
+      { id: 's1', accountId: 'acc_hd_emart', dueDate: '2026-10-05', amount: 430000, settled: false },
+      { id: 's2', accountId: 'acc_hd_mirae', dueDate: '2026-10-05', amount: 128000, settled: false },
+    ],
+  });
+  assert.strictEqual(ctx.cardAccountForBill_(128000, '2026-10-05T09:00:00'), 'acc_hd_mirae');
+  assert.strictEqual(ctx.cardAccountForBill_(430000, '2026-10-05T09:00:00'), 'acc_hd_emart');
+});
+
+check('청구 예정이 없는 달이면 아무 카드나 고르고 넘어간다', () => {
+  const { ctx } = cards();
+  assert.ok(ctx.cardAccountForBill_(300000, '2026-10-05T09:00:00').indexOf('acc_hd_') === 0);
+});
+
 console.log('\n시드 채우기');
 
 check('이미 쓰던 시트에 빠진 카테고리만 더한다', () => {

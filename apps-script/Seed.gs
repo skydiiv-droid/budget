@@ -38,11 +38,14 @@ const SEED_CATEGORIES = [
   ['cat_withdraw',   '현금인출', '',            'transfer', '🏧'],
 ];
 
+// 카드는 장마다 한 줄. 월 누적 사용금액이 카드별로 따로 오므로
+// 한 계정으로 합치면 누적 앵커가 서로 덮어써 대사가 깨진다.
 const SEED_ACCOUNTS = [
   // [id, 이름, 종류, 발급사, 뒷자리, 마감일, 결제일]
-  ['acc_woori',   '우리은행',   'checking', '우리은행',  '', '', ''],
-  ['acc_hyundai', '현대카드',   'card',     '현대카드',  '', '', 5],
-  ['acc_cash',    '현금',       'cash',     '',          '', '', ''],
+  ['acc_woori',    '우리은행',          'checking', '우리은행', '', '', ''],
+  ['acc_hd_emart', '현대 이마트Plus',   'card',     '현대카드', '', '', 5],
+  ['acc_hd_mirae', '현대 미래에셋',     'card',     '현대카드', '', '', 5],
+  ['acc_cash',     '현금',              'cash',     '',         '', '', ''],
 ];
 
 function seedCategories_() {
@@ -204,7 +207,7 @@ function seedMerchants_() {
  * 있는 것은 건드리지 않고 없는 것만 더한다. 여러 번 실행해도 안전하다.
  */
 function resync() {
-  const added = { categories: 0, rules: 0, merchants: 0 };
+  const added = { categories: 0, accounts: 0, rules: 0, merchants: 0 };
 
   const haveCategory = {};
   readAll_('Category').forEach(function (c) { haveCategory[c.id] = true; });
@@ -232,6 +235,17 @@ function resync() {
     added.rules++;
   });
 
+  const haveAccount = {};
+  readAll_('Account').forEach(function (a) { haveAccount[a.id] = true; });
+  SEED_ACCOUNTS.forEach(function (row) {
+    if (haveAccount[row[0]]) return;
+    append_('Account', {
+      id: row[0], name: row[1], type: row[2], issuer: row[3],
+      last4: row[4], closingDay: row[5], billingDay: row[6], active: true,
+    });
+    added.accounts++;
+  });
+
   const haveMerchant = {};
   readAll_('Merchant').forEach(function (m) { haveMerchant[m.normalizedName] = true; });
   SEED_PASSTHROUGH.forEach(function (name) {
@@ -245,7 +259,8 @@ function resync() {
     added.merchants++;
   });
 
-  Logger.log('카테고리 ' + added.categories + '개 · 기본 규칙 ' + added.rules +
-             '개 · 간편결제 ' + added.merchants + '개를 더했습니다.');
+  Logger.log('카테고리 ' + added.categories + '개 · 계정 ' + added.accounts +
+             '개 · 기본 규칙 ' + added.rules + '개 · 간편결제 ' + added.merchants +
+             '개를 더했습니다.');
   return added;
 }

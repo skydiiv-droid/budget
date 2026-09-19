@@ -42,6 +42,7 @@ function parseMessage_(body, sender, receivedAt) {
     ok: false,
     note: '',
     issuer: detectIssuer_(text, sender),
+    cardName: detectCardName_(text),   // "이마트Plus" — 카드가 여러 장이면 이걸로 가른다
     kind: null,           // approval | cancel | withdrawal | deposit | ad | unknown
     amount: null,
     balance: null,        // 우리은행 잔액 앵커
@@ -188,6 +189,17 @@ function detectIssuer_(text, sender) {
   if (/현대\s*카드/.test(haystack)) return '현대카드';
 
   return '';
+}
+
+/**
+ * 카드 상품명. "현대 이마트Plus 승인" -> "이마트Plus"
+ *
+ * 카드를 여러 장 쓰면 어느 카드인지 갈라야 한다. 월 누적 사용금액이 카드마다
+ * 따로 오기 때문에, 한 계정으로 합치면 누적 앵커가 서로 덮어써 대사가 깨진다.
+ */
+function detectCardName_(text) {
+  const m = /(^|\n)\s*현대\s+([가-힣A-Za-z0-9+]+(?:\s?[가-힣A-Za-z0-9+]+)?)\s+(?:승인|취소|결제)/.exec(String(text || ''));
+  return m ? m[2].trim() : '';
 }
 
 function detectKind_(text) {

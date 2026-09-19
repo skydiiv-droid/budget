@@ -5,7 +5,24 @@ import { classify } from './classify.js';
 
 test('카테고리 id 가 겹치지 않는다', () => {
   const ids = categoryDocs().map((c) => c.id);
-  assert.equal(new Set(ids).size, ids.length);
+  const dup = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+  assert.deepEqual(dup, [], '같은 id 가 둘이면 하나가 다른 하나를 덮어쓴다');
+});
+
+test('큰 갈래 아래로 정리돼 있다', () => {
+  const cats = categoryDocs().filter((c) => c.kind === 'expense' && !c.hidden);
+  const mains = cats.filter((c) => !c.parentId);
+  assert.ok(mains.length >= 8 && mains.length <= 12,
+    `한 화면에 늘어놓을 만해야 한다 (지금 ${mains.length}개)`);
+
+  const food = cats.filter((c) => c.parentId === 'cat_food').map((c) => c.name);
+  assert.deepEqual(food, ['배달', '외식', '카페', '편의점', '마트']);
+});
+
+test('예전 칸은 목록에서 숨기되 이름은 남긴다', () => {
+  const legacy = categoryDocs().filter((c) => c.hidden);
+  assert.ok(legacy.length > 0, '지난 거래가 가리키고 있어 지우면 이름을 잃는다');
+  assert.ok(legacy.every((c) => c.name));
 });
 
 test('하위 카테고리의 부모가 실제로 있다', () => {
@@ -30,7 +47,7 @@ test('기본 규칙으로 자주 가는 곳이 갈린다', () => {
   assert.equal(of('컴포즈커피발산'), 'cat_cafe');
   assert.equal(of('이마트24 역삼점'), 'cat_convenience', '"이마트"에 먼저 걸리면 안 된다');
   assert.equal(of('쿠팡이츠'), 'cat_delivery', '"쿠팡"에 먼저 걸리면 안 된다');
-  assert.equal(of('ANTHROPIC CLAUDE'), 'cat_sub_digital');
+  assert.equal(of('ANTHROPIC CLAUDE'), 'cat_subscription');
   assert.equal(of('네이버파이낸셜'), null, '간편결제는 물어봐야 한다');
 });
 

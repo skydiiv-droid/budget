@@ -59,7 +59,7 @@ export const CATEGORIES = [
  */
 export const LEGACY_CATEGORIES = [
   ['cat_sub_digital', '구독(디지털)', 'cat_regular', 'expense', '☁️'],
-  ['cat_subscription',   '구독(미디어)', 'cat_regular', 'expense', '🎬'],
+  ['cat_sub_media',   '구독(미디어)', 'cat_regular', 'expense', '🎬'],
 ];
 
 /**

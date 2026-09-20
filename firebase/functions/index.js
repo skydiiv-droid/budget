@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { parseMessage, normalizeMerchant, splitMessages } from './shared/parse.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { ledger, monthSpending, sameSpanLastMonth, pace, topSpending } from './shared/ledger.js';
+import { matchCard } from './shared/accounts.js';
 
 initializeApp();
 const db = getFirestore();
@@ -118,11 +119,12 @@ async function takeOne(payload) {
     ? { lat: Number(payload.lat), lon: Number(payload.lon) }
     : null;
 
-  const [patterns, rules, merchants, recent] = await Promise.all([
+  const [patterns, rules, merchants, recent, accounts] = await Promise.all([
     root.collection('patterns').get().then(asArray),
     root.collection('rules').get().then(asArray),
     root.collection('merchants').get().then(asArray),
     root.collection('txns').orderBy('occurredAt', 'desc').limit(400).get().then(asArray),
+    root.collection('accounts').get().then(asArray),
   ]);
 
   const parsed = parseMessage(body, payload.sender, receivedAt, patterns);
@@ -151,7 +153,10 @@ async function takeOne(payload) {
   });
 
   const txnRef = root.collection('txns').doc();
-  const txn = buildTransaction(parsed, rawId, location, decision, txnRef.id);
+  // 문자는 "현대 미래에셋 승인"인데 파서는 "미래에셋"만 남긴다. 여기서 등록한
+  // 카드에 붙여 두지 않으면 청구액도 누적 대조도 그 거래를 못 본다.
+  const card = matchCard(parsed.cardName, accounts);
+  const txn = buildTransaction(parsed, rawId, location, decision, txnRef.id, card);
 
   const batch = db.batch();
   batch.set(root.collection('raw').doc(rawId), { ...raw, txnId: txnRef.id });
@@ -177,7 +182,7 @@ async function takeOne(payload) {
   return { ...response, status: 'ok', kind: response.status };
 }
 
-function buildTransaction(parsed, rawId, location, decision, id) {
+function buildTransaction(parsed, rawId, location, decision, id, card) {
   const txn = {
     id,
     type: 'expense',
@@ -186,7 +191,7 @@ function buildTransaction(parsed, rawId, location, decision, id) {
     occurredAt: parsed.occurredAt.toISOString(),
     issuer: parsed.issuer,
     cardName: parsed.cardName,
-    accountId: null,          // 화면에서 계정을 정하면 붙는다
+    accountId: card?.id || null,
     counterAccountId: null,
     categoryId: decision.categoryId || null,
     merchantRaw: parsed.merchantRaw || '',

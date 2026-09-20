@@ -17,7 +17,7 @@ import {
 
 import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMonth, pace }
   from './shared/ledger.js';
-import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf } from './shared/accounts.js';
+import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf, matchCard } from './shared/accounts.js';
 import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
 import { trend, categoryBudgets, monthlyFixed } from './shared/ledger.js';
 import { search, knownTags, parseTags } from './shared/search.js';
@@ -297,6 +297,31 @@ async function migrateRevolving() {
   await commitAll(ops);
 }
 
+/**
+ * 문자로 들어온 거래를 카드에 붙인다.
+ *
+ * 문자에는 "현대 미래에셋 승인"으로 찍히는데 파서는 발급사를 떼고 "미래에셋"만
+ * 남긴다. 등록한 이름과 글자가 달라 어느 카드인지 못 붙었고, 그래서 청구액에도
+ * 누적 대조에도 그 거래가 안 잡혔다. 화면에서는 보이는데 합계에는 없으니
+ * 숫자가 안 맞는 걸 눈으로 보고도 이유를 알 수 없었다.
+ *
+ * 이름으로 찾는 건 화면에서도 하지만, 붙여 두면 카드 이름을 바꿔도 안 끊긴다.
+ */
+async function bindCardTransactions() {
+  const loose = D.txns.filter((t) => !t.accountId && t.cardName);
+  if (!loose.length) return 0;
+
+  const ops = [];
+  for (const t of loose) {
+    const card = matchCard(t.cardName, D.accounts);
+    if (!card) continue;
+    ops.push((b) => b.update(doc(col('txns'), t.id), { accountId: card.id }));
+  }
+  if (!ops.length) return 0;
+  await commitAll(ops);
+  return ops.length;
+}
+
 async function fixSeededAccounts() {
   const metaRef = doc(db, 'users', uid, 'meta', 'settings');
   const meta = await getDoc(metaRef);
@@ -369,6 +394,9 @@ async function refresh() {
 
   // 확실한 취소는 묻지 않고 맞문다. 애매한 것만 정리 탭으로 간다.
   await autoOffset();
+
+  // 카드에 안 붙은 문자 거래가 있으면 붙인다. 안 붙으면 청구액에서 빠진다.
+  if (await bindCardTransactions()) await refresh();
 }
 
 /**
@@ -614,7 +642,8 @@ function renderBills(cards) {
     h += line(`${b.open ? '지금까지' : '그 달에'} 쓴 돈`, b.usage);
     if (b.carried) h += line('넘어온 이월잔액', b.carried);
     h += line('청구 대상', b.billed);
-    h += line(`이번에 낼 돈 (${b.ratio}%)`, b.total, true);
+    // "(70%)" 만 적으면 왜 다 안 내는지 알 수가 없다. 리볼빙 때문이라고 말한다.
+    h += line(`이번에 낼 돈 — 리볼빙 ${b.ratio}%`, b.total, true);
     h += `<div class="note warn" style="margin:10px 0 2px">
       나머지 <b class="num">${won(b.carryOut)}</b>은 다음 달로 넘어가요${
         b.interest ? `, 이자 <b class="num">${won(b.interest)}</b>이 붙어서` : ''}.

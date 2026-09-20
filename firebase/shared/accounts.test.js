@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { debtOf, cashOf, billingWindow, cardBills, rollup, rateOf, cardGroup }
+import { debtOf, cashOf, billingWindow, cardBills, rollup, rateOf, cardGroup, matchCard, inCards }
   from './accounts.js';
 
 const NOW = new Date(2026, 8, 19, 12, 0);   // 2026-09-19
@@ -176,4 +176,49 @@ test('가진 돈과 빚이 한 번에 갈린다', () => {
   assert.equal(r.debtTotal, 3_580_000, '마통 140만 + 카드 이월 218만');
   assert.equal(r.debts[0].name, '현대 이마트Plus', '비싼 빚이 먼저 (연 19.9%)');
   assert.equal(r.billTotal, 2_230_000);
+});
+
+// ───────────────────────────────────────────────── 문자가 카드에 붙는가
+
+const HD = [
+  { id: 'c1', name: '현대 이마트Plus', type: 'card', cardType: 'credit',
+    billingDay: 10, statementGroupId: 'hd', active: true },
+  { id: 'c2', name: '현대 미래에셋', type: 'card', cardType: 'credit',
+    billingDay: 10, statementGroupId: 'hd', active: true },
+];
+
+test('파서가 발급사를 떼어 내도 같은 카드로 본다', () => {
+  // 문자는 "현대 미래에셋 승인" 인데 파서는 "미래에셋" 만 남긴다
+  assert.equal(matchCard('미래에셋', HD)?.id, 'c2');
+  assert.equal(matchCard('이마트Plus', HD)?.id, 'c1');
+  assert.equal(matchCard('현대 미래에셋', HD)?.id, 'c2');
+});
+
+test('띄어쓰기와 대소문자는 무시한다', () => {
+  assert.equal(matchCard('현대미래에셋', HD)?.id, 'c2');
+  assert.equal(matchCard('이마트plus', HD)?.id, 'c1');
+});
+
+test('둘 이상에 걸리면 아무것도 고르지 않는다', () => {
+  assert.equal(matchCard('현대', HD), null,
+    '엉뚱한 카드에 붙이면 청구액이 조용히 틀리고 틀린 줄도 모른다');
+});
+
+test('accountId 가 없는 문자 거래도 청구에 잡힌다', () => {
+  const txns = [
+    { id: 't1', type: 'expense', amount: 5_800, occurredAt: '2026-09-20T10:00:00',
+      cardName: '미래에셋' },
+    { id: 't2', type: 'expense', amount: 1_300, occurredAt: '2026-09-20T11:00:00',
+      cardName: '미래에셋' },
+    { id: 't3', type: 'expense', amount: 3_646_653, occurredAt: '2026-09-18T10:00:00',
+      accountId: 'c2', source: 'manual' },
+  ];
+  const [bill] = cardBills(HD, txns, NOW);
+  assert.equal(bill.usage, 3_653_753,
+    '손으로 넣은 것만 세고 문자로 들어온 것을 빼면 청구액이 모자란다');
+});
+
+test('없는 카드 이름은 어디에도 안 붙는다', () => {
+  assert.equal(inCards({ cardName: '신한체크' }, HD), false);
+  assert.equal(inCards({ accountId: 'zzz' }, HD), false);
 });

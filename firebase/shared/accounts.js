@@ -109,9 +109,41 @@ export function cardGroup(account, accounts = []) {
   return group.length ? group : [account];
 }
 
+const flat = (s) => String(s ?? '').toLowerCase().replace(/\s+/g, '');
+
+/**
+ * 문자에 찍힌 카드 이름을 등록한 카드에 붙인다.
+ *
+ * 문자에는 "현대 미래에셋 승인"처럼 찍히는데 파서는 발급사를 떼고 "미래에셋"만
+ * 남긴다. 등록한 이름은 "현대 미래에셋"이라 글자가 딱 맞지 않는다. 한쪽이
+ * 다른 쪽을 품고 있으면 같은 카드로 본다.
+ *
+ * 둘 이상에 걸리면 아무것도 고르지 않는다. 엉뚱한 카드에 붙이면 청구액이
+ * 조용히 틀리고, 틀린 줄도 모른다.
+ */
+export function matchCard(cardName, accounts = []) {
+  const key = flat(cardName);
+  if (!key) return null;
+  const cards = accounts.filter((a) => alive(a) && isCard(a));
+
+  const exact = cards.filter((c) => flat(c.name) === key);
+  if (exact.length === 1) return exact[0];
+
+  const loose = cards.filter((c) => {
+    const n = flat(c.name);
+    return n && (n.includes(key) || key.includes(n));
+  });
+  return loose.length === 1 ? loose[0] : null;
+}
+
 /** 그 거래가 이 카드들 중 하나로 긁힌 것인가. */
-export const inCards = (t, cards) => cards.some((c) =>
-  (t.accountId && t.accountId === c.id) || (!t.accountId && t.cardName && t.cardName === c.name));
+export function inCards(t, cards = []) {
+  if (t.accountId) return cards.some((c) => c.id === t.accountId);
+  if (!t.cardName) return false;
+  // accountId 가 안 붙은 옛 거래는 이름으로 찾는다
+  const hit = matchCard(t.cardName, cards);
+  return Boolean(hit) && cards.some((c) => c.id === hit.id);
+}
 
 /**
  * 리볼빙.

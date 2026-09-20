@@ -25,6 +25,7 @@ import { toCSV } from './shared/csv.js';
 import { detectRecurring } from './shared/detect.js';
 import { parseShiftText, shiftText, shiftStats, SHIFT_LABEL } from './shared/shifts.js';
 import { cardCheck, balanceCheck } from './shared/anchors.js';
+import { fixedStatus, lateFixed, parseKeywords } from './shared/fixed.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
 import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
@@ -503,7 +504,7 @@ function renderHome() {
   const spentTotal = sumCounted(spent);
   const prev = sameSpanLastMonth(histData(), D.ledger.month);
   const run = pace(spentTotal, D.ledger.month, D.settings.cycleStartDay);
-  let h = renderGap();
+  let h = renderGap() + renderLate();
 
   // ── 이번 달 ────────────────────────────────────────────
   h += `<div class="card">
@@ -607,6 +608,27 @@ function renderGap() {
       total ? `, 카드 쪽은 <b class="num">${won(total)}</b> 차이` : ''}<br>
     한두 번은 별것 아니지만 쌓이면 합계가 통째로 틀어져요.
     <span style="text-decoration:underline">맞추러 가기</span></button>`;
+}
+
+/**
+ * 빠져나갔어야 할 고정지출이 안 들어왔을 때.
+ *
+ * 자동이체는 문자가 오기는 오는데, 그 문자를 놓치면 합계만 조용히 비어 있다.
+ * 예정일 다음 날까지(쉬는 날이면 다음 영업일의 다음 날까지) 안 들어오면
+ * 여기서 말한다. 카드 대조와 달리 이건 건별이라 무엇이 빠졌는지가 바로 나온다.
+ */
+function renderLate() {
+  const rows = lateFixed(fixedState());
+  if (!rows.length) return '';
+
+  const sum = rows.reduce((s, r) => s + (r.varies ? 0 : r.expected), 0);
+  const names = rows.slice(0, 3).map((r) => r.name).join(' · ');
+
+  return `<button type="button" class="note warn" style="margin-bottom:12px" data-tab="fixed">
+    <b>고정지출 ${rows.length}건이 확인되지 않았습니다</b>${
+      sum ? ` — 합계 <b class="num">${won(sum)}</b>` : ''}<br>
+    ${esc(names)}${rows.length > 3 ? ` 외 ${rows.length - 3}건` : ''} · 출금 예정일이 지났습니다.
+    <span style="text-decoration:underline">확인하기</span></button>`;
 }
 
 /**
@@ -779,16 +801,31 @@ function renderTrend(months) {
   </div>`;
 }
 
+/**
+ * 검색칸은 한 번만 그리고 그 아래만 갈아 끼운다.
+ *
+ * 글자를 칠 때마다 내역 화면을 통째로 다시 그리면 치고 있던 입력칸 자체가
+ * 새것으로 바뀐다. 한글은 자모를 모아 한 글자를 만드는 중인데 그 칸이
+ * 사라지므로 조합이 끊기고 글자가 깨진다.
+ */
+function histShell() {
+  if ($('histSearch')) return $('histBody');
+  $('history').innerHTML = `<div class="card" style="padding:12px 14px">
+    <input id="histSearch" type="search" autocomplete="off" enterkeyhint="search"
+      placeholder="가맹점 · 카테고리 · 금액 · 태그 검색"
+      value="${esc(histQuery)}" style="min-height:42px"></div>
+    <div id="histBody"></div>`;
+  return $('histBody');
+}
+
 function renderHistory() {
-  const box = `<div class="card" style="padding:12px 14px">
-    <input id="histSearch" type="search" autocomplete="off" placeholder="가게 · 카테고리 · 금액 · 태그로 찾기"
-      value="${esc(histQuery)}" style="min-height:42px"></div>`;
+  const body = histShell();
 
   // 찾는 중에는 달을 넘나들지 않는다. "그때 그 병원"이 몇 월인지 알면 안 찾는다.
   if (histQuery.trim()) {
     const hits = search(histQuery, { transactions: D.txns, categories: D.categories });
     const total = hits.reduce((sum, t) => sum + (t.type === 'expense' ? Number(t.amount || 0) : 0), 0);
-    let f = box;
+    let f = '';
     if (!hits.length) {
       f += `<div class="card"><div class="empty">「${esc(histQuery)}」로 찾은 게 없어요.<br>
         이름 일부만 쳐도 돼요.</div></div>`;
@@ -799,7 +836,7 @@ function renderHistory() {
         <div class="card" style="padding:4px 16px">${hits.slice(0, 80).map(txRow).join('')}</div>`;
       if (hits.length > 80) f += `<div class="muted" style="text-align:center;margin-top:8px">앞 80건만 보여요</div>`;
     }
-    $('history').innerHTML = f;
+    body.innerHTML = f;
     return;
   }
 
@@ -821,7 +858,7 @@ function renderHistory() {
          + `${pct > 0 ? '+' : pct < 0 ? '−' : '±'}${Math.abs(pct)}%</b>`;
   }
 
-  let h = box + `<div class="card">
+  let h = `<div class="card">
     <div class="row">
       <button type="button" class="act ghost small" data-month="-1" aria-label="지난달">←</button>
       <div class="grow" style="text-align:center">
@@ -839,7 +876,7 @@ function renderHistory() {
   if (!rows.length) {
     h += `<div class="card"><div class="empty">이 달엔 쓴 기록이 없어요.<br>
       카드 문자가 들어오면 여기에 쌓입니다.</div></div>`;
-    $('history').innerHTML = h;
+    body.innerHTML = h;
     return;
   }
 
@@ -904,7 +941,7 @@ function renderHistory() {
       <div class="card" style="padding:4px 16px">${list.map(txRow).join('')}</div>`;
   }
 
-  $('history').innerHTML = h;
+  body.innerHTML = h;
 }
 
 /**
@@ -1240,6 +1277,11 @@ function renderCheck() {
       <div class="row" style="padding:7px 0">
         <span class="grow" style="font-size:13px;color:var(--ink2)">우리가 센 것</span>
         <span class="num" style="font-size:14px;font-weight:600">${won(c.counted)}</span></div>
+      ${/* 카드사 누적에는 지난달에서 넘어온 이월잔액이 얹혀 있다. 빼 두지 않으면
+           그만큼이 통째로 "놓친 결제"로 보인다. */''}
+      ${c.carried ? `<div class="row" style="padding:7px 0">
+        <span class="grow" style="font-size:13px;color:var(--ink2)">리볼빙 이월 (지난달에서 넘어옴)</span>
+        <span class="num" style="font-size:14px;font-weight:600">${won(c.carried)}</span></div>` : ''}
       <div class="hr"></div>
       <div class="row">
         <span class="grow" style="font-size:13.5px;font-weight:600">${c.missing ? '안 들어온 결제' : '더 들어온 결제'}</span>
@@ -1345,56 +1387,109 @@ function renderFixed() {
   // 연 1회짜리는 열두 달로 나눠 얹는다. 나가는 달에만 세면 나머지 열한 달은
   // 돈이 있는 줄 안다.
   const total = monthlyFixed(list);
+  const status = new Map(fixedState().map((r) => [r.id, r]));
 
   const yearly = list.filter((r) => r.period === 'yearly');
-  let h = `<div class="card"><div class="lbl">한 달에 나가는 돈</div>
+  let h = `<div class="card"><div class="lbl">월 고정지출</div>
     <div class="big num" style="font-size:34px;margin:9px 0 6px">₩${won(Math.round(total))}</div>
-    <div class="muted">1년이면 <b class="num" style="color:var(--down)">₩${won(Math.round(total * 12))}</b>${
-      yearly.length ? ` · 연 1회 ${yearly.length}건을 열두 달로 나눠 넣었어요` : ''}</div></div>`;
+    <div class="muted">연 <b class="num" style="color:var(--down)">₩${won(Math.round(total * 12))}</b>${
+      yearly.length ? ` · 연 1회 ${yearly.length}건을 12개월로 나눠 반영` : ''}</div></div>`;
 
   h += '<div class="card">';
   if (!list.length) {
-    h += `<div class="empty">넣어 둔 고정비가 없어요.<br>구독·통신비·보험료를 넣으면<br>빚 갚을 여력이 정확해져요.</div>`;
+    h += `<div class="empty">등록된 고정지출이 없습니다.<br>구독 · 통신비 · 보험료를 등록하면<br>상환 여력이 정확해집니다.</div>`;
   } else {
     for (const r of list) {
+      const st = status.get(r.id);
       h += `<div class="item">
         <span class="muted num" style="width:34px">${r.period === 'yearly'
           ? `${r.monthOfYear || 1}월` : (r.dayOfMonth ? r.dayOfMonth + '일' : '—')}</span>
-        <span class="grow"><span style="font-size:13.5px;font-weight:500">${esc(r.name)}</span>${
-          r.period === 'yearly'
-            ? `<br><span class="muted">해마다 · 한 달로 치면 <span class="num">${won(Math.round(r.expectedAmount / 12))}</span></span>`
-            : ''}</span>
-        <span class="num" style="font-size:13.5px;font-weight:600">${won(r.expectedAmount)}</span>
+        <span class="grow"><span style="font-size:13.5px;font-weight:500">${esc(r.name)}</span>
+          ${fixedNote(r, st)}</span>
+        <span class="num" style="font-size:13.5px;font-weight:600">${
+          r.amountVaries ? '약 ' : ''}${won(r.expectedAmount)}</span>
         <span class="acts">
-          <button type="button" class="act ghost small" data-edit="recurring:${r.id}">고치기</button>
+          <button type="button" class="act ghost small" data-edit="recurring:${r.id}">수정</button>
           <button type="button" class="act danger" data-del="recurring:${r.id}">삭제</button></span></div>`;
     }
   }
   h += '</div>';
 
+  const payOptions = D.accounts.filter((a) => a.active !== false)
+    .map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+
   h += `<form class="card" data-form="recurring">
-    <div class="lbl" style="margin-bottom:12px">고정비 넣기</div>
+    <div class="lbl" style="margin-bottom:12px">고정지출 등록</div>
     <input type="hidden" name="id">
     <div class="field"><label>이름</label><input name="name" placeholder="넷플릭스" required></div>
     <div class="fields">
-      <div class="field"><label>얼마나 자주</label>
+      <div class="field"><label>주기</label>
         <select name="period">
-          <option value="monthly">달마다</option>
-          <option value="yearly">해마다 (연 1회)</option></select></div>
-      <div class="field" data-rwhen="yearly"><label>몇 월</label>
+          <option value="monthly">매월</option>
+          <option value="yearly">연 1회</option></select></div>
+      <div class="field" data-rwhen="yearly"><label>결제 월</label>
         <select name="monthOfYear">${Array.from({ length: 12 }, (_, i) =>
           `<option value="${i + 1}">${i + 1}월</option>`).join('')}</select></div></div>
     <div class="fields">
       <div class="field"><label>금액</label><input name="expectedAmount" inputmode="numeric" placeholder="17,000" required></div>
       <div class="field"><label>결제일</label><input name="dayOfMonth" inputmode="numeric" placeholder="5"></div></div>
+    <label class="check" style="margin:-2px 0 12px">
+      <input type="checkbox" name="amountVaries">
+      <span>금액이 매월 달라짐 — 위 금액은 대략치로만 사용</span></label>
     <div class="muted" data-rwhen="yearly" style="margin:-4px 0 12px">
-      연 1회짜리는 <b>열두 달로 나눠</b> 여력 계산에 넣어요. 나가는 달에만 세면
-      나머지 열한 달은 돈이 있는 줄 압니다.</div>
+      연 1회 항목은 12개월로 나눠 상환 여력에 반영합니다.</div>
+
+    <div class="hr"></div>
+    ${/* 고정지출도 결국 문자로 들어온다. 등록한 항목이 하는 일은 내역을 만드는 게
+         아니라 들어온 문자 중에 이것이 있는지 확인하는 것이다. */''}
+    <div class="field"><label>결제 수단</label>
+      <select name="accountId"><option value="">지정 안 함</option>${payOptions}</select></div>
+    <div class="field"><label>문자에서 찾을 단어</label>
+      <input name="keywords" placeholder="NETFLIX, 넷플릭스">
+      <div class="muted" style="margin-top:6px">문자에 찍히는 이름이 위 이름과 다를 때 사용합니다.
+        쉼표로 여러 개를 넣을 수 있습니다.</div></div>
     <div class="field"><label>카테고리</label>
       <select name="categoryId">${catOptions()}</select></div>
-    <button type="submit" class="act primary" style="width:100%">추가</button></form>`;
+    <button type="submit" class="act primary" style="width:100%">등록</button></form>`;
 
   $('fixed').innerHTML = h;
+}
+
+/** 등록한 고정지출이 이번 달에 어디까지 왔는지. */
+function fixedState(month) {
+  return fixedStatus({
+    recurring: D.recurring, transactions: D.txns,
+    accounts: D.accounts, settings: D.settings,
+  }, month || monthKey(), new Date());
+}
+
+const DATE_SHORT = (d) => `${d.getMonth() + 1}월 ${d.getDate()}일`;
+
+/** 고정지출 한 줄 아래에 붙는 설명. 상태가 곧 설명이다. */
+function fixedNote(r, st) {
+  const bits = [];
+  if (r.period === 'yearly') {
+    bits.push(`연 1회 · 월 <span class="num">${won(Math.round(r.expectedAmount / 12))}</span>`);
+  }
+  if (!st || st.state === 'idle') {
+    if (r.dayOfMonth) return bits.length ? `<br><span class="muted">${bits.join(' · ')}</span>` : '';
+    bits.push('결제일 미등록 — 미출금 확인 불가');
+    return `<br><span class="muted">${bits.join(' · ')}</span>`;
+  }
+
+  if (st.state === 'paid') {
+    const at = new Date(st.txn.occurredAt);
+    bits.push(`<b style="color:var(--ink2)">${DATE_SHORT(at)} 출금 확인</b>`);
+    if (st.diff) {
+      bits.push(`등록액보다 <b class="num" style="color:var(--warn-mark)">${
+        won(Math.abs(st.diff))}</b> ${st.diff > 0 ? '많음' : '적음'}`);
+    }
+  } else if (st.state === 'late') {
+    bits.push(`<b style="color:var(--warn-mark)">${DATE_SHORT(st.settled)} 예정 · 미확인</b>`);
+  } else if (st.state === 'waiting') {
+    bits.push(`${DATE_SHORT(st.settled)} 예정${st.shifted ? ' — 휴일이라 이월' : ''}`);
+  }
+  return `<br><span class="muted">${bits.join(' · ')}</span>`;
 }
 
 const ASSET_LABEL = { checking: '입출금', savings: '저축 · 투자', cash: '현금' };
@@ -2141,8 +2236,13 @@ async function saveDoc(kind, values) {
       id: ref.id, name, period,
       monthOfYear: period === 'yearly' ? (Number(values.monthOfYear) || 1) : null,
       expectedAmount: parseAmount(values.expectedAmount) || 0,
+      // 통신비처럼 달마다 금액이 바뀌는 건은 위 금액이 대략치다. 금액을 견주지 않는다.
+      amountVaries: values.amountVaries === true,
       dayOfMonth: Number(values.dayOfMonth) || null,
       categoryId: values.categoryId || null,
+      // 문자 중에 이 항목을 찾아내는 단서
+      accountId: values.accountId || '',
+      keywords: parseKeywords(values.keywords),
     });
   }
 
@@ -2372,7 +2472,12 @@ document.addEventListener('click', guard(async (e) => {
         form.elements.statementWith.value = mate ? mate.id : '';
         syncAccountForm();
       }
-      if (kind === 'recurring') syncRecurringForm();
+      if (kind === 'recurring') {
+        form.elements.amountVaries.checked = row.amountVaries === true;
+        form.elements.keywords.value = parseKeywords(row.keywords).join(', ');
+        form.elements.expectedAmount.value = won(row.expectedAmount);
+        syncRecurringForm();
+      }
       const box = form.closest('.fold');
       if (box && !box.open) box.open = true;
       form.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2451,17 +2556,16 @@ document.addEventListener('change', guard(async (e) => {
 }));
 
 /**
- * 규칙이 여든 개가 넘는다. 다시 그리면 글자를 치던 칸에서 손이 떨어지므로
- * 줄을 숨기기만 한다.
+ * 치는 동안에는 입력칸을 건드리지 않는다.
+ *
+ * 검색은 검색칸 아래만, 규칙 거르기는 줄을 숨기는 것만으로 한다. 입력칸이
+ * 든 자리를 다시 그리면 한글 조합이 끊겨 글자가 깨진다.
  */
 document.addEventListener('input', (e) => {
   if (e.target.id === 'histSearch') {
     histQuery = e.target.value;
     editTxn = null;
     renderHistory();
-    // 다시 그리면서 손이 칸에서 떨어진다. 치던 자리로 돌려놓는다.
-    const box = $('histSearch');
-    if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
     return;
   }
   if (e.target.id !== 'ruleFilter') return;

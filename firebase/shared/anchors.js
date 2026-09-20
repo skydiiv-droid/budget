@@ -15,7 +15,7 @@
  *   차이    32,900  ← 이만큼 어딘가 안 들어왔다
  */
 
-import { cardGroup, inCards, alive, isCard } from './accounts.js';
+import { cardGroup, inCards, alive, isCard, revolvingOf } from './accounts.js';
 
 const num = (v) => Number(v || 0);
 const monthOf = (iso) => String(iso || '').slice(0, 7);
@@ -28,6 +28,10 @@ const monthOf = (iso) => String(iso || '').slice(0, 7);
  *
  * 취소된 건은 카드사 누적에서도 빠지므로 우리도 뺀다. 할부·일시불은 둘 다
  * 승인 금액이 누적에 들어가므로 구분하지 않는다.
+ *
+ * 리볼빙을 쓰면 카드사가 찍는 누적에 **지난달에서 넘어온 이월잔액**이 얹혀
+ * 있다. 그건 이번 달에 긁은 게 아니라 우리 거래에는 없으므로, 빼 두지 않으면
+ * 이월잔액만큼이 통째로 "문자를 놓친 결제"로 뜬다.
  */
 export function cardCheck(data = {}) {
   const { anchors = [], transactions = [], accounts = [] } = data;
@@ -63,13 +67,22 @@ export function cardCheck(data = {}) {
       .reduce((s, t) => s + num(t.amount), 0);
 
     const reported = num(anchor.reported);
-    const gap = reported - counted;
+    const raw = reported - counted;
+
+    // 이월잔액을 빼 보되, 그래서 오히려 더 벌어지면 그 카드사는 누적에
+    // 이월분을 안 얹는다는 뜻이다. 그때는 손대지 않는다.
+    const carried = group.reduce((s, c) => s + revolvingOf(c), 0);
+    const used = carried > 0 && Math.abs(raw - carried) < Math.abs(raw) ? carried : 0;
+    const gap = raw - used;
+
     out.push({
       key, month, at: anchor.at,
       accountId: account?.id || '',
       accountIds: group.map((c) => c.id),
       name: group.length > 1 ? group.map((c) => c.name).join(' + ') : (account?.name || anchor.cardName || key),
       reported, counted, gap,
+      // 누적에 얹혀 있던 리볼빙 이월잔액. 0 이면 안 얹혀 있었다는 뜻이다.
+      carried: used,
       // 1원까지 맞기를 기대하지 않는다. 앵커보다 늦게 들어온 문자가 섞일 수 있다.
       missing: gap > 0 ? gap : 0,
       extra: gap < 0 ? -gap : 0,

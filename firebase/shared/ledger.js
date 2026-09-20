@@ -11,6 +11,7 @@
  * 구독은 등록해 둔 항목이기도 하고 카드 승인 문자로도 들어오기 때문이다.
  */
 import { normalizeMerchant } from './parse.js';
+import { hitsRecurring } from './fixed.js';
 import { netAmount } from './settlement.js';
 import { rollup } from './accounts.js';
 import { prevBusinessDay } from './holidays.js';
@@ -60,14 +61,14 @@ const inWindow = (iso, win) => {
   return t >= win.start.getTime() && t < win.end.getTime();
 };
 
-/** 거래가 등록해 둔 고정지출 중 하나인지 본다. 이름이 가맹점에 들어 있으면 같은 것으로 본다. */
-export function matchRecurring(txn, recurring = []) {
-  const merchant = normalizeMerchant(txn.merchantRaw);
-  if (!merchant) return null;
-  return recurring.find((r) => {
-    const name = normalizeMerchant(r.name);
-    return name && merchant.includes(name);
-  }) ?? null;
+/**
+ * 거래가 등록해 둔 고정지출 중 하나인지 본다.
+ *
+ * 이름·키워드·결제 수단으로 가른다. 판단은 한 곳(fixed.js)에만 두어야
+ * 고정비 화면이 "들어왔다"고 하는데 여기서는 변동비로 세는 일이 없다.
+ */
+export function matchRecurring(txn, recurring = [], accounts = []) {
+  return recurring.find((r) => hitsRecurring(txn, r, accounts)) ?? null;
 }
 
 /**
@@ -101,7 +102,7 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
     const net = netAmount(t, settlements);        // 돌려받은 만큼은 내 돈이 아니다
     if (net <= 0) continue;
 
-    if (matchRecurring(t, recurring)) actualFixed += net;
+    if (matchRecurring(t, recurring, accounts)) actualFixed += net;
     else actualVariable += net;
 
     const key = t.categoryId || 'cat_unknown';

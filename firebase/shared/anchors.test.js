@@ -167,3 +167,57 @@ test('손으로 넣은 거래도 함께 센다', () => {
   });
   assert.equal(r.ok, true, '내역에서 넣은 건이 대조에 안 잡히면 영영 안 맞는다');
 });
+
+test('리볼빙 이월잔액을 놓친 결제로 세지 않는다', () => {
+  const accounts = [{
+    id: 'c1', type: 'card', cardType: 'credit', name: '현대 미래에셋', issuer: '현대',
+    revolving: true, revolvingBalance: 1_200_000, revolvingRatio: 70,
+  }];
+  const transactions = [
+    { id: 't1', type: 'expense', amount: 300_000, occurredAt: '2026-09-10T10:00:00', accountId: 'c1' },
+  ];
+  const anchors = [{
+    kind: 'cumulative', cardName: '현대 미래에셋', issuer: '현대',
+    reported: 1_500_000, at: '2026-09-10T10:01:00',
+  }];
+
+  const [row] = cardCheck({ anchors, transactions, accounts });
+  assert.equal(row.carried, 1_200_000);
+  assert.equal(row.gap, 0);
+  assert.equal(row.missing, 0);
+  assert.equal(row.ok, true);
+});
+
+test('이월잔액을 빼서 더 벌어지면 손대지 않는다', () => {
+  // 누적에 이월분을 안 얹는 카드사. 빼 버리면 없던 차이가 생긴다.
+  const accounts = [{
+    id: 'c1', type: 'card', cardType: 'credit', name: '현대 미래에셋', issuer: '현대',
+    revolving: true, revolvingBalance: 1_200_000, revolvingRatio: 70,
+  }];
+  const transactions = [
+    { id: 't1', type: 'expense', amount: 300_000, occurredAt: '2026-09-10T10:00:00', accountId: 'c1' },
+  ];
+  const anchors = [{
+    kind: 'cumulative', cardName: '현대 미래에셋', issuer: '현대',
+    reported: 310_000, at: '2026-09-10T10:01:00',
+  }];
+
+  const [row] = cardCheck({ anchors, transactions, accounts });
+  assert.equal(row.carried, 0);
+  assert.equal(row.missing, 10_000);
+});
+
+test('리볼빙을 안 쓰는 카드는 그대로 견준다', () => {
+  const accounts = [{ id: 'c1', type: 'card', cardType: 'credit', name: '현대 이마트', issuer: '현대' }];
+  const transactions = [
+    { id: 't1', type: 'expense', amount: 300_000, occurredAt: '2026-09-10T10:00:00', accountId: 'c1' },
+  ];
+  const anchors = [{
+    kind: 'cumulative', cardName: '현대 이마트', issuer: '현대',
+    reported: 332_900, at: '2026-09-10T10:01:00',
+  }];
+
+  const [row] = cardCheck({ anchors, transactions, accounts });
+  assert.equal(row.carried, 0);
+  assert.equal(row.missing, 32_900);
+});

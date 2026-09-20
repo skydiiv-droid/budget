@@ -24,6 +24,7 @@ import { search, knownTags, parseTags } from './shared/search.js';
 import { toCSV } from './shared/csv.js';
 import { detectRecurring } from './shared/detect.js';
 import { parseShiftText, shiftText, shiftStats, SHIFT_LABEL } from './shared/shifts.js';
+import { findDuties, dutyPeople, dutiesOf, toShifts, dutyEndpoint } from './shared/duty.js';
 import { cardCheck, balanceCheck } from './shared/anchors.js';
 // candidates 는 취소 상계에서 쓰는 지역 변수와 이름이 겹친다. 갈아 두면
 // 한쪽을 고칠 때 다른 쪽이 조용히 가려지는 일이 없다.
@@ -47,6 +48,7 @@ const openMain = new Map();
 /** 내역에서 보고 있는 달 · 펼쳐 둔 갈래 · 고치는 중인 거래 · 찾는 말. */
 let histQuery = '';
 let fixPick = null;      // '출금됐습니다' 를 누른 고정지출
+let dutyFound = null;    // 근무표 앱에서 방금 읽어 온 것
 let histMonth = null;
 let histOpen = null;
 let editTxn = null;
@@ -1954,7 +1956,7 @@ function renderShiftForm() {
   const [y, m] = month.split('-');
   const now = shiftText(D.shifts, month);
 
-  return `<form data-form="shifts">
+  return renderDutyImport(month) + `<form data-form="shifts">
     <input type="hidden" name="month" value="${month}">
     <div class="muted" style="margin-bottom:12px">
       <b>${Number(y)}년 ${Number(m)}월</b> 근무를 1일부터 순서대로 입력하세요.<br>
@@ -1968,6 +1970,122 @@ function renderShiftForm() {
       style="font-family:ui-monospace,monospace;letter-spacing:1px">${esc(now)}</span></div>
     <button type="submit" class="act primary" style="width:100%">저장</button>
     <div class="note ok" style="margin:12px 0 0">오전 8시 이전 지출은 <b>전날 근무</b>로 집계합니다.</div></form>`;
+}
+
+/**
+ * 근무표 앱에서 가져오기.
+ *
+ * 근무표는 따로 만든 앱에 이미 들어 있다. 한 달에 서른 글자씩 매달 다시 치는
+ * 건 낭비고, 손으로 옮기면 하루쯤 밀린 걸 알아채기도 어렵다.
+ *
+ * 저장 구조를 모른 채로 읽는다 — 나무를 훑어 듀티처럼 생긴 값을 찾고, 그 위
+ * 키에서 사람과 달을 읽는다. 읽기만 하고 그쪽 앱에는 아무것도 쓰지 않는다.
+ */
+function renderDutyImport(month) {
+  const url = D.settings.dutyUrl || '';
+  const picked = D.settings.dutyPerson || '';
+
+  let h = `<form data-form="duty" style="margin-bottom:14px">
+    <div class="field"><label>근무표 앱 주소</label>
+      <input name="dutyUrl" type="url" inputmode="url" autocomplete="off"
+        placeholder="https://…firebasedatabase.app" value="${esc(url)}">
+      <div class="muted" style="margin-top:6px">근무표를 읽어만 옵니다. 그쪽 앱은 바뀌지 않습니다.</div></div>
+    <div class="acts" style="justify-content:flex-start">
+      <button type="submit" class="act ghost small">주소 저장</button>
+      ${url ? '<button type="button" class="act primary small" id="dutyLoad">불러오기</button>' : ''}
+    </div>`;
+
+  if (dutyFound?.error) {
+    h += `<div class="note warn" style="margin:12px 0 0">${esc(dutyFound.error)}</div>`;
+  }
+
+  const duties = dutyFound?.duties || [];
+  if (dutyFound && !dutyFound.error) {
+    const people = dutyPeople(duties);
+    if (!people.length) {
+      h += `<div class="note warn" style="margin:12px 0 0">근무표를 찾지 못했습니다.
+        주소가 맞는지, 읽기가 열려 있는지 확인하세요.</div>`;
+    } else {
+      // 고른 사람이 목록에 없으면 (이름이 바뀌었거나 처음이면) 제일 많은 사람부터
+      const who = people.some((p) => p.person === picked) ? picked : people[0].person;
+      h += `<div class="hr"></div>`;
+      if (people.length > 1) {
+        h += `<div class="field"><label>누구 근무표입니까</label>
+          <select data-dutyperson>${people.map((p) =>
+            `<option value="${esc(p.person)}"${p.person === who ? ' selected' : ''}>${
+              esc(p.person || '이름 없음')} · ${p.months}개월</option>`).join('')}</select></div>`;
+      }
+
+      const mine = dutiesOf(duties, who);
+      h += `<div class="lbl" style="margin:2px 0 7px">찾은 근무표 ${mine.length}개월</div>`;
+      for (const d of mine.slice(0, 12)) {
+        const out = toShifts(d.month, d.text);
+        const here = d.month === month;
+        h += `<div class="item" style="padding:9px 0">
+          <span class="grow"><span style="font-size:13px;font-weight:600">${
+            Number(d.month.split('-')[1])}월</span>
+            <span class="muted" style="font-weight:400"> ${out.count}일치${
+              out.ok ? '' : ` · 날수와 ${out.last}일이 안 맞습니다`}</span><br>
+            <span class="muted" style="font-family:ui-monospace,monospace;letter-spacing:1px">${
+              esc(d.text.slice(0, 31))}</span></span>
+          <button type="button" class="act ${here ? 'primary' : 'ghost'} small"
+            data-dutyput="${esc(d.month)}">${here ? '이 달 넣기' : '넣기'}</button></div>`;
+      }
+      if (mine.length > 1) {
+        h += `<button type="button" class="act ghost" style="width:100%;margin-top:10px"
+          id="dutyPutAll">찾은 ${mine.length}개월 전부 넣기</button>`;
+      }
+    }
+  }
+  return h + '</form>';
+}
+
+/** 근무표 앱을 읽는다. 여기서 실패하면 이유를 그대로 적어 준다. */
+async function loadDuty() {
+  const url = dutyEndpoint(D.settings.dutyUrl);
+  if (!url) {
+    dutyFound = { error: 'https:// 로 시작하는 주소를 먼저 저장하세요' };
+    return renderSetup();
+  }
+  toast('불러오는 중…');
+  try {
+    const res = await fetch(url, { headers: { accept: 'application/json' } });
+    if (res.status === 401 || res.status === 403) {
+      dutyFound = { error: '근무표 앱이 로그인을 요구합니다 — 읽기 규칙을 확인하세요.' };
+    } else if (!res.ok) {
+      dutyFound = { error: `불러오지 못했습니다 (${res.status})` };
+    } else {
+      const tree = await res.json();
+      dutyFound = tree ? { duties: findDuties(tree) } : { error: '비어 있습니다' };
+    }
+  } catch (err) {
+    dutyFound = { error: `닿지 못했습니다 — ${err.message}` };
+  }
+  renderSetup();
+}
+
+/** 가져온 달들을 근무표에 넣는다. 그 달 것만 갈아 끼우고 나머지는 둔다. */
+async function putDuty(months) {
+  const who = D.settings.dutyPerson || dutyPeople(dutyFound?.duties || [])[0]?.person || '';
+  const mine = dutiesOf(dutyFound?.duties || [], who)
+    .filter((d) => months.includes(d.month));
+  if (!mine.length) return toast('넣을 근무표가 없습니다');
+
+  let days = { ...D.shifts };
+  let count = 0;
+  for (const d of mine) {
+    const out = toShifts(d.month, d.text);
+    days = Object.fromEntries(Object.entries(days).filter(([k]) => !k.startsWith(d.month)));
+    days = { ...days, ...out.days };
+    count += out.count;
+  }
+  await setDoc(doc(db, 'users', uid, 'meta', 'shifts'), { days });
+  await refresh();
+
+  const off = mine.map((d) => toShifts(d.month, d.text)).filter((o) => !o.ok);
+  toast(off.length
+    ? `${count}일치를 넣었습니다 — ${off.map((o) => Number(o.month.split('-')[1]) + '월').join(' · ')}은 날수와 안 맞으니 확인하세요`
+    : `${mine.length}개월 ${count}일치를 넣었습니다`);
 }
 
 /**
@@ -2208,6 +2326,8 @@ async function saveDoc(kind, values) {
   if (kind !== 'settings' && !name) return toast('이름을 입력하세요');
 
   if (kind === 'settings') {
+    // merge 없이 쓰면 이 폼이 안 건드리는 설정(갈래별 예산 · 안 물어볼 목록 ·
+    // 지운 카테고리 · 근무표 주소)까지 통째로 날아간다.
     await setDoc(doc(db, 'users', uid, 'meta', 'settings'), {
       monthlyIncome: parseAmount(values.monthlyIncome) || 0,
       variableBudget: parseAmount(values.variableBudget) || 0,
@@ -2215,7 +2335,7 @@ async function saveDoc(kind, values) {
       debtTargetDate: values.debtTargetDate || '',
       cycleStartDay: Math.min(28, Math.max(1, Number(values.cycleStartDay) || 1)),
       cycleMode: values.cycleMode || 'calendar',
-    });
+    }, { merge: true });
   } else if (kind === 'accounts') {
     const type = values.type || 'checking';
     const existing = D.accounts.find((a) => a.id === values.id)
@@ -2622,6 +2742,14 @@ document.addEventListener('click', guard(async (e) => {
     return toast('삭제했습니다');
   }
 
+  if (e.target.id === 'dutyLoad') return loadDuty();
+  if (e.target.id === 'dutyPutAll') {
+    const who = D.settings.dutyPerson || dutyPeople(dutyFound?.duties || [])[0]?.person || '';
+    return putDuty(dutiesOf(dutyFound?.duties || [], who).map((d) => d.month));
+  }
+  const dutyPut = e.target.closest('[data-dutyput]');
+  if (dutyPut) return putDuty([dutyPut.dataset.dutyput]);
+
   if (e.target.id === 'pingIngest') return pingIngest();
 
   if (e.target.id === 'exportCsv') return exportCsv();
@@ -2671,6 +2799,13 @@ document.addEventListener('change', guard(async (e) => {
   }
   if (e.target.name === 'kind' && e.target.closest('[data-form="goal"]')) {
     return syncGoalForm();
+  }
+
+  if (e.target.matches('[data-dutyperson]')) {
+    await setDoc(doc(db, 'users', uid, 'meta', 'settings'),
+      { dutyPerson: e.target.value }, { merge: true });
+    await refresh();
+    return renderSetup();
   }
 
   const sel = e.target.closest('[data-recat]');
@@ -2793,6 +2928,15 @@ document.addEventListener('submit', guard(async (e) => {
     if (out.status === 'parse_failed') return toast(`인식하지 못했습니다 — ${out.note || ''}`);
     if (out.status === 'ok') return toast(`${out.merchant} ${won(out.amount)} 등록했습니다`);
     return toast(out.message || '등록하지 못했습니다');
+  }
+
+  if (form.dataset.form === 'duty') {
+    const url = String(values.dutyUrl || '').trim();
+    if (url && !/^https:\/\//.test(url)) return toast('https:// 로 시작해야 합니다');
+    await setDoc(doc(db, 'users', uid, 'meta', 'settings'), { dutyUrl: url }, { merge: true });
+    dutyFound = null;
+    await refresh();
+    return toast(url ? '저장했습니다 — 불러오기를 누르세요' : '주소를 비웠습니다');
   }
 
   if (form.dataset.form === 'shifts') {

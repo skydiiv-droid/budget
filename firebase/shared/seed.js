@@ -192,6 +192,9 @@ export const SETTINGS = {
   debtStartAmount: 0,
   debtTargetDate: '',
   cycleStartDay: 1,
+  // 따로 만든 근무표 앱에서 듀티를 읽어 온다. 읽기만 한다.
+  dutyUrl: '',
+  dutyPerson: '',
 };
 
 /** 카테고리를 화면에 쓰기 좋은 모양으로. */

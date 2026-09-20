@@ -54,7 +54,7 @@ export function parseMessage(body, sender, receivedAt, patterns = []) {
 
   if (hasAny(text, KEYWORDS.ad)) {
     return { ...result, kind: 'ad', ok: true, layer: 'keyword',
-             note: '광고 문자 — 거래 생성 안 함', occurredAt: now };
+             note: '광고 문자 — 내역 생성 안 함', occurredAt: now };
   }
 
   const byPattern = applyPatterns(text, result.issuer, patterns);
@@ -71,7 +71,7 @@ export function parseMessage(body, sender, receivedAt, patterns = []) {
 
   result.ok = result.kind !== null && result.kind !== 'unknown' && result.amount !== null;
   if (!result.ok && !result.note) {
-    result.note = result.amount === null ? '금액을 못 찾음' : '거래 종류를 못 정함';
+    result.note = result.amount === null ? '금액을 찾지 못함' : '거래 종류를 판정하지 못함';
   }
   return result;
 }

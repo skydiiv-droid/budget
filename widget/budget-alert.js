@@ -29,15 +29,15 @@ const lines = [];
 
 if (d.ok && d.nextBill && d.nextBill.daysLeft <= DAYS_AHEAD) {
   const when = d.nextBill.daysLeft === 0 ? '오늘'
-    : d.nextBill.daysLeft === 1 ? '내일' : `${d.nextBill.daysLeft}일 뒤`;
-  lines.push(`${when} 카드값 ${won(d.billTotal)} 빠져요`);
+    : d.nextBill.daysLeft === 1 ? '내일' : `${d.nextBill.daysLeft}일 후`;
+  lines.push(`${when} 카드 결제 ${won(d.billTotal)} 출금`);
 }
 
 // 예산을 다 쓴 날도 알려 준다. 다 쓰고 나서 아는 것보다 낫다.
 if (d.ok && d.budget && d.usedPct >= 100) {
-  lines.push(`이 달 생활비 예산을 다 썼어요 (${d.usedPct}%)`);
+  lines.push(`이번 달 생활비 예산 소진 (${d.usedPct}%)`);
 } else if (d.ok && d.budget && d.projected > d.budget * 1.15 && d.daysLeft > 3) {
-  lines.push(`이 속도면 예산을 ${won(d.projected - d.budget)} 넘겨요`);
+  lines.push(`현재 속도라면 예산 ${won(d.projected - d.budget)} 초과 예상`);
 }
 
 if (lines.length) {

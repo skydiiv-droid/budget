@@ -43,18 +43,18 @@ async function draw(family, data = DATA) {
   return dump(root).join('\n');
 }
 
-test('큰 위젯은 총액 · 예산 · 하루 평균 · 예상 · 갈래를 다 그린다', async () => {
+test('큰 위젯은 총액 · 예산 · 하루 평균 · 예상 · 카테고리를 다 그린다', async () => {
   const out = await draw('large');
-  assert.match(out, /이 달에 쓴 돈/);
+  assert.match(out, /이번 달 지출/);
   assert.match(out, /₩581,350/);
   assert.match(out, /20\/30일/);
   assert.match(out, /예산 ₩900,000 중 63%/);
   assert.match(out, /하루 평균/);
   assert.match(out, /₩29,068/);
-  assert.match(out, /이 속도면 이 달은/);
+  assert.match(out, /이번 달 예상/);
   assert.match(out, /₩894,306/);
-  assert.match(out, /예산보다 ₩5,694 적어요/);
-  assert.match(out, /어디에 썼나/);
+  assert.match(out, /예산 ₩5,694 미만 예상/);
+  assert.match(out, /카테고리별 지출/);
   assert.match(out, /🍚 식비/);
   assert.match(out, /🎁 경조사/);
   assert.match(out, /🛍️ 쇼핑/);
@@ -74,8 +74,8 @@ test('예산을 안 잡았으면 예산 줄을 그리지 않는다', async () =>
 
 test('예산을 넘기면 넘긴 만큼을 말한다', async () => {
   const out = await draw('large', { ...DATA, spent: 1_000_000, usedPct: 111, projected: 1_400_000 });
-  assert.match(out, /₩100,000 넘음/);
-  assert.match(out, /예산보다 ₩500,000 넘겨요/);
+  assert.match(out, /₩100,000 초과/);
+  assert.match(out, /예산 ₩500,000 초과 예상/);
 });
 
 test('어느 크기도 빈 화면이 되지 않는다', async () => {
@@ -93,7 +93,7 @@ test('못 불러오면 무엇이 문제인지 적는다', async () => {
   const src = `${source('budget-widget.js')}\n// err-${Math.random()}`;
   await import(`data:text/javascript;base64,${Buffer.from(src).toString('base64')}`);
   const out = dump(root).join('\n');
-  assert.match(out, /불러오지 못했어요/);
+  assert.match(out, /불러오지 못했습니다/);
   assert.match(out, /토큰이 맞지 않습니다/, '빈 화면만 보면 뭘 고쳐야 할지 모른다');
 });
 

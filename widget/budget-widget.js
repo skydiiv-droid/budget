@@ -43,8 +43,8 @@ const SURFACE = dyn('#FFFFFF', '#161A20');
 const INK = dyn('#10151C', '#F2F5F9');     // 15.97:1 / 18.32:1
 const MUTED = dyn('#5B6573', '#98A4B3');   //  5.91:1 /  6.90:1
 const BLUE = dyn('#1D6FE0', '#4E86DE');
-const DOWN = BLUE;                          // 나간 돈 · 빚
-const UP = dyn('#C7362B', '#D9604F');       // 들어온 돈 · 잔고
+const DOWN = BLUE;                          // 나간 돈 · 부채
+const UP = dyn('#C7362B', '#D9604F');       // 들어온 돈 · 잔액
 const WARN = dyn('#C08A1E', '#E0AE4A');     // 예산 넘김 — 부호가 아니라 경고다
 const TRACK = dyn('#E4EAF2', '#2A3340');
 
@@ -82,8 +82,8 @@ async function load() {
 
 /** 예산을 안 잡았으면 "오늘 쓸 수 있는 돈"이 없다. 그때는 쓴 돈을 보여 준다. */
 const headline = (d) => (d.budget
-  ? { label: '오늘 쓸 수 있는 돈', value: d.perDay, color: d.perDay > 0 ? UP : WARN }
-  : { label: '이 달에 쓴 돈', value: d.spent, color: INK });
+  ? { label: '오늘 사용 가능액', value: d.perDay, color: d.perDay > 0 ? UP : WARN }
+  : { label: '이번 달 지출', value: d.spent, color: INK });
 
 function text(stack, s, { size = 13, color = INK, bold = false, opacity = 1 } = {}) {
   const t = stack.addText(String(s));
@@ -98,7 +98,7 @@ function text(stack, s, { size = 13, color = INK, bold = false, opacity = 1 } = 
 /** 잠금화면은 흑백으로 나온다. 색 대신 글자로 말해야 한다. */
 function accessoryInline(w, d) {
   const h = headline(d);
-  text(w, d.budget ? `오늘 ${won(d.perDay)} · ${d.daysLeft}일` : `이 달 ${won(d.spent)}`,
+  text(w, d.budget ? `오늘 ${won(d.perDay)} · ${d.daysLeft}일` : `이번 달 ${won(d.spent)}`,
        { size: 13 });
 }
 
@@ -107,7 +107,7 @@ function accessoryCircular(w, d) {
   const ring = w.addStack();
   ring.layoutVertically();
   ring.centerAlignContent();
-  text(ring, d.budget ? `${Math.min(99, d.usedPct)}%` : '쓴 돈', { size: 15, bold: true });
+  text(ring, d.budget ? `${Math.min(99, d.usedPct)}%` : '지출', { size: 15, bold: true });
   text(ring, short(h.value), { size: 11 });
 }
 
@@ -115,7 +115,7 @@ function accessoryRectangular(w, d) {
   const h = headline(d);
   text(w, h.label, { size: 11, opacity: 0.7 });
   text(w, won(h.value), { size: 20, bold: true });
-  if (d.budget) text(w, `${d.usedPct}% 썼고 ${d.daysLeft}일 남음`, { size: 11, opacity: 0.7 });
+  if (d.budget) text(w, `${d.usedPct}% 사용 · ${d.daysLeft}일 남음`, { size: 11, opacity: 0.7 });
   else if (d.lastMonthSameSpan) text(w, `지난달 같은 기간 ${short(d.lastMonthSameSpan)}`,
                                      { size: 11, opacity: 0.7 });
 }
@@ -153,11 +153,11 @@ function small(w, d) {
     w.addSpacer(5);
     text(w, `${d.usedPct}% · ${d.daysLeft}일 남음`, { size: 11, color: MUTED });
   } else {
-    text(w, `이 속도면 ${short(d.projected)}`, { size: 11, color: MUTED });
+    text(w, `예상 ${short(d.projected)}`, { size: 11, color: MUTED });
   }
   if (d.waiting) {
     w.addSpacer(4);
-    text(w, `정리할 게 ${d.waiting}건`, { size: 11, color: WARN, bold: true });
+    text(w, `확인할 내역 ${d.waiting}건`, { size: 11, color: WARN, bold: true });
   }
 }
 
@@ -174,10 +174,10 @@ function medium(w, d) {
   const right = cols.addStack();
   right.layoutVertically();
   if (d.nextBill) {
-    text(right, '다음 카드값', { size: 11, color: MUTED });
+    text(right, '다음 카드 결제', { size: 11, color: MUTED });
     right.addSpacer(3);
     text(right, won(d.billTotal), { size: 17, bold: true, color: DOWN });
-    text(right, `${d.nextBill.payAt.slice(5).replace('-', '/')} · ${d.nextBill.daysLeft}일 뒤`,
+    text(right, `${d.nextBill.payAt.slice(5).replace('-', '/')} · ${d.nextBill.daysLeft}일 후`,
          { size: 11, color: MUTED });
     right.addSpacer(8);
   }
@@ -207,7 +207,7 @@ function large(w, d) {
   // ── 이 달에 쓴 돈 ───────────────────────────────────────
   const head = w.addStack();
   head.centerAlignContent();
-  text(head, '이 달에 쓴 돈', { size: 12, color: MUTED });
+  text(head, '이번 달 지출', { size: 12, color: MUTED });
   head.addSpacer();
   if (d.days) text(head, `${d.dayOf}/${d.days}일`, { size: 11, color: MUTED });
 
@@ -219,7 +219,7 @@ function large(w, d) {
     bar(w, d.usedPct, over ? WARN : BLUE, barWidth(), 7);
     w.addSpacer(5);
     text(w, `예산 ${won(d.budget)} 중 ${d.usedPct}%${
-      over ? ` · ${won(d.spent - d.budget)} 넘음` : ` · 남은 ${d.daysLeft}일`}`,
+      over ? ` · ${won(d.spent - d.budget)} 초과` : ` · ${d.daysLeft}일 남음`}`,
       { size: 11, color: over ? WARN : MUTED });
   }
 
@@ -228,11 +228,11 @@ function large(w, d) {
   row(w, '하루 평균', won(d.dailyAvg || 0));
   w.addSpacer(6);
   const end = d.budget ? (d.projected > d.budget ? WARN : UP) : INK;
-  row(w, '이 속도면 이 달은', won(d.projected || 0), { color: end });
+  row(w, '이번 달 예상', won(d.projected || 0), { color: end });
   if (d.budget) {
     w.addSpacer(2);
     const gap = (d.projected || 0) - d.budget;
-    text(w, gap > 0 ? `예산보다 ${won(gap)} 넘겨요` : `예산보다 ${won(-gap)} 적어요`,
+    text(w, gap > 0 ? `예산 ${won(gap)} 초과 예상` : `예산 ${won(-gap)} 미만 예상`,
       { size: 11, color: gap > 0 ? WARN : MUTED });
   }
 
@@ -242,7 +242,7 @@ function large(w, d) {
   if (!top.length) return;
 
   w.addSpacer(12);
-  text(w, '어디에 썼나', { size: 12, color: MUTED });
+  text(w, '카테고리별 지출', { size: 12, color: MUTED });
   w.addSpacer(6);
 
   const most = top[0].amount || 1;
@@ -262,7 +262,7 @@ function large(w, d) {
 function oops(w, err) {
   text(w, '가계부', { size: 12, color: MUTED });
   w.addSpacer(4);
-  text(w, '불러오지 못했어요', { size: 14, bold: true });
+  text(w, '불러오지 못했습니다', { size: 14, bold: true });
   w.addSpacer(2);
   const t = w.addText(String(err.message || err));
   t.font = Font.systemFont(10);

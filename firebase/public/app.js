@@ -134,10 +134,10 @@ async function start() {
       return r.json();
     });
   } catch {
-    screen(`<h1>설정이 없어요</h1>
+    screen(`<h1>설정이 없습니다</h1>
       <p class="muted" style="margin-top:10px;line-height:1.7">
         Firebase 콘솔 → 프로젝트 설정 → <b>내 앱</b> 에서<br>
-        웹 앱(&lt;/&gt;)을 하나 추가해 주세요.<br>한 번이면 됩니다.
+        웹 앱(&lt;/&gt;)을 추가하세요.
       </p>`);
     return;
   }
@@ -159,7 +159,7 @@ async function start() {
       await migrateRevolving();
       await refresh();
     } catch (err) {
-      screen(`<h1>열지 못했어요</h1>
+      screen(`<h1>열지 못했습니다</h1>
         <p class="muted" style="margin-top:10px;line-height:1.7">${esc(err.message)}</p>
         <button class="act ghost" style="margin-top:16px" onclick="location.reload()">다시 시도</button>`);
     }
@@ -168,7 +168,7 @@ async function start() {
 
 function showSignIn() {
   screen(`<h1>가계부</h1>
-    <p class="muted" style="margin:10px 0 20px">구글 계정으로 들어갑니다</p>
+    <p class="muted" style="margin:10px 0 20px">구글 계정으로 로그인합니다</p>
     <button class="act primary" id="signin">로그인</button>`);
   $('signin').onclick = async () => {
     const provider = new GoogleAuthProvider();
@@ -424,7 +424,7 @@ async function autoOffset() {
   if (!done) return;
   await commitAll(ops);
   await refresh();
-  toast(`취소 ${done}건을 원래 결제와 맞물렸어요`);
+  toast(`취소 ${done}건을 원결제와 상계했습니다`);
 }
 
 // ───────────────────────────────────────────────── 그리기
@@ -474,7 +474,7 @@ const catIcon = (id) => D.categories.find((c) => c.id === id)?.icon ?? '';
 function catOptions(selected = '') {
   const opt = (c, label) =>
     `<option value="${c.id}"${c.id === selected ? ' selected' : ''}>${esc(label ?? c.name)}</option>`;
-  let h = `<option value=""${selected ? '' : ' selected'}>고르지 않음</option>`;
+  let h = `<option value=""${selected ? '' : ' selected'}>지정 안 함</option>`;
   for (const m of mainCats()) {
     const kids = subCats(m.id);
     if (!kids.length) { h += opt(m); continue; }
@@ -508,7 +508,7 @@ function renderHome() {
 
   // ── 이번 달 ────────────────────────────────────────────
   h += `<div class="card">
-    <div class="row"><span class="lbl grow">이 달에 쓴 돈</span>
+    <div class="row"><span class="lbl grow">이번 달 지출</span>
       <span class="muted">${run.dayOf}/${run.days}일</span></div>
     <div class="big num" style="font-size:38px;margin:10px 0 ${budget.limit ? 12 : 8}px">₩${won(spentTotal)}</div>`;
 
@@ -516,28 +516,28 @@ function renderHome() {
     h += `<div class="bar"><i style="width:${Math.min(100, budget.usedPct)}%;background:${
       budget.usedPct > 100 ? 'var(--warn-mark)' : 'var(--blue)'}"></i></div>
       <div class="row" style="margin-top:9px">
-        <span class="grow" style="font-size:13px;color:var(--ink2)">오늘 쓸 수 있는 돈</span>
+        <span class="grow" style="font-size:13px;color:var(--ink2)">오늘 사용 가능액</span>
         <span class="num" style="font-size:19px;font-weight:700;color:${
           budget.perDay > 0 ? 'var(--up)' : 'var(--warn-mark)'}">₩${won(budget.perDay)}</span></div>
-      <div class="muted">예산 ₩<span class="num">${won(budget.limit)}</span> 중 ${budget.usedPct}% · 남은 ${budget.daysLeft}일</div>`;
+      <div class="muted">예산 ₩<span class="num">${won(budget.limit)}</span> 중 ${budget.usedPct}% 사용 · ${budget.daysLeft}일 남음</div>`;
   }
 
   if (prev.total > 0) {
     const gap = spentTotal - prev.total;
     const pct = Math.round((gap / prev.total) * 100);
     h += `<div class="note ${gap > 0 ? 'warn' : 'ok'}" style="margin:12px 0 0">
-      ${gap > 0 ? '지난달 같은 기간보다' : '지난달 같은 기간보다'}
-      <b class="num">₩${won(Math.abs(gap))}</b> ${gap > 0 ? '더' : '덜'} 쓰고 있어요 (${pct > 0 ? '+' : ''}${pct}%).<br>
-      이 속도면 이 달은 <b class="num">₩${won(run.projected)}</b>${
-        budget.limit ? ` — 예산보다 <b class="num">₩${won(Math.abs(run.projected - budget.limit))}</b> ${run.projected > budget.limit ? '넘어요' : '적어요'}` : ''}.</div>`;
+      지난달 같은 기간보다
+      <b class="num">₩${won(Math.abs(gap))}</b> ${gap > 0 ? '더' : '덜'} 지출 (${pct > 0 ? '+' : ''}${pct}%).<br>
+      현재 속도라면 이번 달 <b class="num">₩${won(run.projected)}</b> 예상${
+        budget.limit ? ` — 예산 <b class="num">₩${won(Math.abs(run.projected - budget.limit))}</b> ${run.projected > budget.limit ? '초과' : '미만'}` : ''}.</div>`;
   } else if (!budget.limit) {
-    h += `<div class="muted" style="margin-top:4px">설정에서 생활비 예산을 잡으면
-      <b>오늘 쓸 수 있는 돈</b>이 여기 나와요.</div>`;
+    h += `<div class="muted" style="margin-top:4px">설정에서 생활비 예산을 등록하면
+      <b>오늘 사용 가능액</b>이 표시됩니다.</div>`;
   }
 
   h += `<div class="hr"></div>
     <button type="button" class="act tint" style="width:100%" data-tab="history">
-      어디에 썼는지 보기 →</button></div>`;
+      카테고리별 지출 보기 →</button></div>`;
 
   // ── 다음 카드값 ─────────────────────────────────────────
   if (cards.total) h += renderBills(cards);
@@ -548,7 +548,7 @@ function renderHome() {
   // ── 순자산 ─────────────────────────────────────────────
   if (assets.total || debt.total) {
     h += `<div class="card">
-      <div class="row"><span class="lbl grow">순자산</span><span class="muted">가진 돈 − 빚</span></div>
+      <div class="row"><span class="lbl grow">순자산</span><span class="muted">자산 − 부채</span></div>
       <div class="big num" style="font-size:28px;margin:9px 0 12px;color:${assets.net >= 0 ? 'var(--ink)' : 'var(--down)'}">
         ${assets.net < 0 ? '−₩' + won(-assets.net) : '₩' + won(assets.net)}</div>`;
     assets.items.filter((a) => a.balance).forEach((a) => {
@@ -558,27 +558,27 @@ function renderHome() {
     });
     if (debt.total) {
       h += `<div class="row" style="padding:5px 0">
-        <span class="grow" style="font-size:13px;color:var(--ink2)">빚</span>
+        <span class="grow" style="font-size:13px;color:var(--ink2)">부채</span>
         <span class="num" style="font-size:13.5px;font-weight:600;color:var(--down)">− ${won(debt.total)}</span></div>`;
     }
     h += '</div>';
   }
 
   // ── 이번 달 계산 ────────────────────────────────────────
-  h += `<div class="card"><div class="lbl" style="margin-bottom:11px">이번 달 계산</div>
+  h += `<div class="card"><div class="lbl" style="margin-bottom:11px">이번 달 수지</div>
     ${flowRow('수입', planned.income, 'var(--up)', '+')}
-    ${flowRow('고정비', planned.fixed, 'var(--down)', '−')}
+    ${flowRow('고정지출', planned.fixed, 'var(--down)', '−')}
     ${flowRow('생활비 예산', planned.variableBudget, 'var(--down)', '−')}
     <div class="hr"></div>
-    <div class="row"><span class="grow" style="font-size:14px;font-weight:600">남는 돈</span>
+    <div class="row"><span class="grow" style="font-size:14px;font-weight:600">잔여</span>
       <span class="big num" style="font-size:22px;color:${planned.available >= 0 ? 'var(--up)' : 'var(--down)'}">${won(planned.available)}</span>
     </div></div>`;
 
   const waiting = inbox.pending + inbox.unparsed + openCancels(D.txns).length;
   if (waiting) {
     h += `<button type="button" class="note warn" data-tab="inbox">
-      정리할 게 <b>${waiting}건</b> 있어요 — 분류 안 된 결제 ${inbox.pending}건, 못 읽은 문자 ${inbox.unparsed}건<br>
-      <span style="text-decoration:underline">정리하러 가기</span></button>`;
+      확인할 내역 <b>${waiting}건</b> — 미분류 결제 ${inbox.pending}건, 인식 실패 문자 ${inbox.unparsed}건<br>
+      <span style="text-decoration:underline">확인하기</span></button>`;
   }
 
   $('home').innerHTML = h;
@@ -604,10 +604,10 @@ function renderGap() {
   ].filter(Boolean).join(' · ');
 
   return `<button type="button" class="note warn" style="margin-bottom:12px" data-tab="inbox">
-    <b>문자에 찍힌 숫자와 안 맞아요</b> — ${what}${
-      total ? `, 카드 쪽은 <b class="num">${won(total)}</b> 차이` : ''}<br>
-    한두 번은 별것 아니지만 쌓이면 합계가 통째로 틀어져요.
-    <span style="text-decoration:underline">맞추러 가기</span></button>`;
+    <b>카드사 · 은행 기록과 금액이 다릅니다</b> — ${what}${
+      total ? `, 카드 <b class="num">${won(total)}</b> 차이` : ''}<br>
+    누적되면 합계 전체가 어긋납니다.
+    <span style="text-decoration:underline">확인하기</span></button>`;
 }
 
 /**
@@ -641,11 +641,11 @@ function renderLate() {
 function renderBills(cards) {
   const lead = cards.items[0];
   let h = `<div class="card">
-    <div class="row"><span class="lbl grow">다음 카드값</span>
-      <span class="muted">${lead.daysLeft}일 뒤</span></div>
+    <div class="row"><span class="lbl grow">다음 카드 결제</span>
+      <span class="muted">${lead.daysLeft}일 후</span></div>
     <div class="big num" style="font-size:30px;color:var(--down);margin:10px 0 4px">₩${won(cards.total)}</div>
     <div class="muted" style="margin-bottom:12px">${esc(dateLabel(lead.payAt))} 출금${
-      lead.shifted ? ' — 결제일이 쉬는 날이라 밀렸어요' : ''}</div>`;
+      lead.shifted ? ' — 결제일이 휴일이라 이월' : ''}</div>`;
 
   for (const b of cards.items) {
     h += `<div class="hr"></div>
@@ -658,28 +658,27 @@ function renderBills(cards) {
       <span class="num" style="font-size:13px;font-weight:${strong ? 700 : 600}">${won(value)}</span></div>`;
 
     if (!b.revolving) {
-      h += line(`${b.open ? '지금까지' : '그 달에'} 쓴 돈`, b.usage, true);
+      h += line(b.open ? '이번 달 사용액' : '해당 월 사용액', b.usage, true);
       continue;
     }
-    h += line(`${b.open ? '지금까지' : '그 달에'} 쓴 돈`, b.usage);
-    if (b.carried) h += line('넘어온 이월잔액', b.carried);
+    h += line(b.open ? '이번 달 사용액' : '해당 월 사용액', b.usage);
+    if (b.carried) h += line('전월 이월잔액', b.carried);
     h += line('청구 대상', b.billed);
     // "(70%)" 만 적으면 왜 다 안 내는지 알 수가 없다. 리볼빙 때문이라고 말한다.
     h += line(`이번에 낼 돈 — 리볼빙 ${b.ratio}%`, b.total, true);
     h += `<div class="note warn" style="margin:10px 0 2px">
-      나머지 <b class="num">${won(b.carryOut)}</b>은 다음 달로 넘어가요${
-        b.interest ? `, 이자 <b class="num">${won(b.interest)}</b>이 붙어서` : ''}.
-      적게 낼수록 다음 달이 무거워집니다.</div>`;
+      잔액 <b class="num">${won(b.carryOut)}</b>은 다음 달로 이월됩니다${
+        b.interest ? ` — 이자 <b class="num">${won(b.interest)}</b> 가산` : ''}.</div>`;
   }
 
-  h += `<div class="muted" style="margin-top:10px">청구 대상은 <b>그 달 1일부터 말일까지</b> 쓴
-    금액이에요. ${lead.open ? '이 달이 아직 안 끝나서 계속 늘어납니다.' : ''}</div></div>`;
+  h += `<div class="muted" style="margin-top:10px">청구 대상은 <b>해당 월 1일부터 말일까지</b>의 사용액입니다.${
+      lead.open ? ' 이번 달은 진행 중이라 계속 증가합니다.' : ''}</div></div>`;
   return h;
 }
 
 const GOAL_WORD = {
-  payoff: { verb: '갚음', left: '남은 빚', none: '갚을 빚이 없어요' },
-  save: { verb: '모음', left: '더 모아야 할 돈', none: '목표를 다 채웠어요' },
+  payoff: { verb: '상환', left: '남은 부채', none: '상환할 부채가 없습니다' },
+  save: { verb: '적립', left: '남은 목표액', none: '목표를 달성했습니다' },
 };
 
 /**
@@ -688,8 +687,8 @@ const GOAL_WORD = {
  */
 function renderGoal(goal, debt, planned) {
   if (goal.kind === 'keep') {
-    return `<div class="card"><div class="empty">목표를 아직 안 정했어요.<br>
-      설정에서 <b>빚 갚기</b>나 <b>모으기</b>를 정하면<br>여기에 진행과 언제 끝나는지가 나와요.</div></div>`;
+    return `<div class="card"><div class="empty">설정된 목표가 없습니다.<br>
+      설정에서 <b>부채 상환</b> 또는 <b>저축</b>을 등록하면<br>진행률과 예상 완료 시점이 표시됩니다.</div></div>`;
   }
   const w = GOAL_WORD[goal.kind];
   let h = `<div class="card">
@@ -698,7 +697,7 @@ function renderGoal(goal, debt, planned) {
 
   if (goal.done) {
     h += `<div class="big" style="font-size:24px;margin:12px 0 8px;color:var(--blue)">${w.none} 🎉</div>
-      <div class="muted">설정에서 다음 목표를 정해 보세요.</div></div>`;
+      <div class="muted">설정에서 다음 목표를 등록하세요.</div></div>`;
     return h;
   }
 
@@ -716,27 +715,27 @@ function renderGoal(goal, debt, planned) {
       h += `<div class="row" style="padding:7px 0">
         <span style="width:3px;height:26px;border-radius:2px;background:${i === 0 ? 'var(--down)' : '#CBD5E1'}"></span>
         <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(d.name)}</span><br>
-          <span class="muted">연 ${Number(d.rate) || 0}%${i === 0 && debt.items.length > 1 ? ' · 먼저 갚기' : ''}</span></span>
+          <span class="muted">연 ${Number(d.rate) || 0}%${i === 0 && debt.items.length > 1 ? ' · 우선 상환' : ''}</span></span>
         <span class="num" style="font-size:15px;font-weight:600">${won(d.amount)}</span></div>`;
     });
   }
   h += '</div>';
 
   if (!planned.income) {
-    h += `<div class="note warn">매달 들어오는 돈을 아직 안 넣었어요.<br>설정에 넣으면 <b>언제 끝나는지</b>가 나옵니다.</div>`;
+    h += `<div class="note warn">월 수입이 등록되지 않았습니다.<br>등록하면 예상 완료 시점이 표시됩니다.</div>`;
   } else if (goal.paceMonths === null) {
-    h += `<div class="note warn"><b>지금은 여력이 없어요.</b><br>
-      고정비나 생활비 예산을 줄이지 않으면 제자리예요.</div>`;
+    h += `<div class="note warn"><b>현재 상환 여력이 없습니다.</b><br>
+      고정지출이나 생활비 예산을 줄여야 합니다.</div>`;
   } else if (goal.needPerMonth === null) {
-    h += `<div class="note ok">이 속도면 <b>${goal.paceMonths}개월</b> 걸려요.
-      설정에서 목표 날짜를 정하면 속도가 맞는지 알려드릴게요.</div>`;
+    h += `<div class="note ok">현재 속도로 <b>${goal.paceMonths}개월</b> 소요됩니다.
+      설정에서 목표 날짜를 등록하면 달성 가능 여부를 안내합니다.</div>`;
   } else if (goal.onTrack) {
-    h += `<div class="note ok"><b>이 속도면 ${goal.paceMonths}개월 — 목표 안에 끝나요.</b><br>
-      매달 ₩<span class="num">${won(goal.needPerMonth)}</span> 필요, 여력 ₩<span class="num">${won(planned.available)}</span>.</div>`;
+    h += `<div class="note ok"><b>현재 속도로 ${goal.paceMonths}개월 — 목표 내 달성 가능.</b><br>
+      월 ₩<span class="num">${won(goal.needPerMonth)}</span> 필요, 여력 ₩<span class="num">${won(planned.available)}</span>.</div>`;
   } else {
-    h += `<div class="note warn"><b>이 속도면 ${goal.paceMonths}개월 — 목표보다 늦어요.</b><br>
-      목표 안에 끝내려면 매달 <b class="num">₩${won(goal.needPerMonth)}</b>이 필요해요.
-      지금 여력은 <b class="num">₩${won(planned.available)}</b>, <b class="num">₩${won(goal.shortfall)}</b> 모자랍니다.</div>`;
+    h += `<div class="note warn"><b>현재 속도로 ${goal.paceMonths}개월 — 목표 대비 지연.</b><br>
+      목표 내 달성하려면 월 <b class="num">₩${won(goal.needPerMonth)}</b>이 필요합니다.
+      현재 여력 <b class="num">₩${won(planned.available)}</b>, <b class="num">₩${won(goal.shortfall)}</b> 부족합니다.</div>`;
   }
   return h;
 }
@@ -789,15 +788,15 @@ function renderTrend(months) {
   }
 
   return `<div class="card">
-    <div class="row"><span class="lbl grow">달마다 쓴 돈</span>
-      <span class="muted">천 원 단위</span></div>
+    <div class="row"><span class="lbl grow">월별 지출</span>
+      <span class="muted">단위: 천 원</span></div>
     <div class="trend" style="--h:${H}px">
       ${limit ? `<div class="tb-limit" style="bottom:${y(limit) + 17}px">
         <span>예산 <b class="num">${won(Math.round(limit / 1000))}</b></span></div>` : ''}
       ${bars}
     </div>
     ${months.at(-1).current ? `<div class="muted" style="margin-top:12px">
-      옅은 칸은 <b>이 속도로 갔을 때</b>의 이달 끝값이에요. 아직 안 끝난 달이라 그냥 견주면 낮게 보입니다.</div>` : ''}
+      연한 막대는 <b>현재 속도 기준</b> 이번 달 예상액입니다. 진행 중인 달이라 그대로 비교하면 낮게 보입니다.</div>` : ''}
   </div>`;
 }
 
@@ -827,14 +826,14 @@ function renderHistory() {
     const total = hits.reduce((sum, t) => sum + (t.type === 'expense' ? Number(t.amount || 0) : 0), 0);
     let f = '';
     if (!hits.length) {
-      f += `<div class="card"><div class="empty">「${esc(histQuery)}」로 찾은 게 없어요.<br>
-        이름 일부만 쳐도 돼요.</div></div>`;
+      f += `<div class="card"><div class="empty">「${esc(histQuery)}」 검색 결과가 없습니다.<br>
+        이름 일부만 입력해도 됩니다.</div></div>`;
     } else {
       f += `<div class="card">
-        <div class="row"><span class="lbl grow">찾은 것 ${hits.length}건</span>
+        <div class="row"><span class="lbl grow">검색 결과 ${hits.length}건</span>
           <span class="num" style="font-size:15px;font-weight:700">${won(total)}</span></div></div>
         <div class="card" style="padding:4px 16px">${hits.slice(0, 80).map(txRow).join('')}</div>`;
-      if (hits.length > 80) f += `<div class="muted" style="text-align:center;margin-top:8px">앞 80건만 보여요</div>`;
+      if (hits.length > 80) f += `<div class="muted" style="text-align:center;margin-top:8px">최근 80건만 표시합니다</div>`;
     }
     body.innerHTML = f;
     return;
@@ -863,19 +862,19 @@ function renderHistory() {
       <button type="button" class="act ghost small" data-month="-1" aria-label="지난달">←</button>
       <div class="grow" style="text-align:center">
         <div style="font-size:15px;font-weight:600">${Number(y)}년 ${Number(m)}월</div>
-        <div class="muted">${D.settings.cycleStartDay || 1}일부터 한 달</div></div>
+        <div class="muted">${D.settings.cycleStartDay || 1}일 시작 기준</div></div>
       <button type="button" class="act ghost small" data-month="1" aria-label="다음 달"
         ${atNow ? 'disabled style="opacity:.32"' : ''}>→</button>
     </div>
     <div class="hr"></div>
-    <div class="lbl">이 달에 쓴 돈</div>
+    <div class="lbl">이번 달 지출</div>
     <div class="big num" style="font-size:40px;margin:10px 0 7px">₩${won(total)}</div>
     <div class="muted">${rows.length}건${diff}</div>
   </div>`;
 
   if (!rows.length) {
-    h += `<div class="card"><div class="empty">이 달엔 쓴 기록이 없어요.<br>
-      카드 문자가 들어오면 여기에 쌓입니다.</div></div>`;
+    h += `<div class="card"><div class="empty">이번 달 지출 내역이 없습니다.<br>
+      카드 문자가 수신되면 자동으로 등록됩니다.</div></div>`;
     body.innerHTML = h;
     return;
   }
@@ -890,9 +889,9 @@ function renderHistory() {
 
   const top = b.items[0]?.amount || 1;
   h += `<div class="card">
-    <div class="lbl">어디에 썼나</div>
-    <div class="muted" style="margin:4px 0 6px">큰 갈래를 누르면 그 안이 열려요.${
-      limits.withLimit.length ? ' 예산을 잡은 갈래는 예산에 견줘 보여줍니다.' : ''}</div>`;
+    <div class="lbl">카테고리별 지출</div>
+    <div class="muted" style="margin:4px 0 6px">상위 카테고리를 누르면 하위가 열립니다.${
+      limits.withLimit.length ? ' 예산을 설정한 카테고리는 예산 대비로 표시됩니다.' : ''}</div>`;
   for (const it of b.items) {
     const open = histOpen === it.id;
     const cap = limitOf(it.id);
@@ -911,7 +910,7 @@ function renderHistory() {
         cap?.over ? ' style="color:var(--warn-mark);font-weight:700"' : ''}>${
         /* 한 칸에 두 뜻을 섞으면 안 된다 — 43% 가 예산의 43% 인지 전체의 43% 인지
            알 길이 없다. 막대가 무엇에 견준 것인지 글자로 말해 준다. */''}${
-        cap?.limit ? `${cap.over ? '예산 넘음' : `예산 ${cap.pct}%`}` : `비중 ${it.pct}%`}</span></span>
+        cap?.limit ? `${cap.over ? '예산 초과' : `예산 ${cap.pct}%`}` : `비중 ${it.pct}%`}</span></span>
     </button>`;
     if (!open) continue;
     for (const sub of it.subs) {
@@ -920,7 +919,7 @@ function renderHistory() {
         <span class="num" style="font-weight:600">${won(sub.amount)}</span></div>`;
     }
     if (!it.subs.length) {
-      h += `<div class="brk-sub"><span class="muted">더 나눌 갈래가 없어요</span></div>`;
+      h += `<div class="brk-sub"><span class="muted">하위 카테고리 없음</span></div>`;
     }
   }
   h += '</div>';
@@ -932,7 +931,7 @@ function renderHistory() {
     days.get(key).push(r);
   }
 
-  h += `<div class="lbl" style="margin:20px 2px 0">쓴 내역 · 누르면 고칠 수 있어요</div>`;
+  h += `<div class="lbl" style="margin:20px 2px 0">지출 내역 · 누르면 수정</div>`;
   for (const [key, list] of days) {
     const d = new Date(`${key}T00:00:00`);
     h += `<div class="day">
@@ -956,8 +955,7 @@ function renderShifts(month) {
   if (!has) {
     // 안 넣었으면 조르지 않는다. 한 번만 알려 주고 만다.
     return Object.keys(D.shifts).length ? '' : `<button type="button" class="note ok"
-      data-tab="setup">근무표를 넣으면 <b>근무별로 얼마 쓰는지</b> 볼 수 있어요 —
-      나이트 다음 날 유독 많이 쓰는지 같은 것. 설정 → 근무표.</button>`;
+      data-tab="setup">근무표를 등록하면 <b>근무 유형별 지출</b>을 볼 수 있습니다. 설정 → 근무표.</button>`;
   }
 
   const rows = monthSpending(histData(), month);
@@ -973,33 +971,32 @@ function renderShifts(month) {
       <span class="bar"><i style="width:${Math.max(3, Math.round((i.perDay / top) * 100))}%;
         background:var(--blue)${faint ? ';opacity:.45' : ''}"></i></span>
     </span>
-    <span class="brk-amt num">${won(i.perDay)}<br><span class="muted">하루</span></span></div>`;
+    <span class="brk-amt num">${won(i.perDay)}<br><span class="muted">일 평균</span></span></div>`;
 
   return `<div class="card">
-    <div class="row"><span class="lbl grow">근무별로 하루에</span>
-      <span class="muted">${s.days}일치</span></div>
-    <div class="muted" style="margin:4px 0 4px">총액이 아니라 하루 평균이에요.
-      오프가 많으면 총액은 당연히 커지니까요.</div>
+    <div class="row"><span class="lbl grow">근무 유형별 일 평균 지출</span>
+      <span class="muted">${s.days}일 기준</span></div>
+    <div class="muted" style="margin:4px 0 4px">총액이 아닌 일 평균입니다.</div>
     ${s.items.map((i) => line(i)).join('')}
     ${s.afterNight ? line(s.afterNight, true) : ''}
     ${s.gap > 5000 ? `<div class="note ok" style="margin:12px 0 0">
-      <b>${esc(s.items[0].label)}</b>에는 <b>${esc(s.items.at(-1).label)}</b>보다
-      하루 <b class="num">${won(s.gap)}</b>씩 더 써요.
-      ${esc(s.items[0].label)}가 이 달에 ${s.items[0].days}일이니
-      <b class="num">${won(s.gap * s.items[0].days)}</b> 차이예요.</div>` : ''}
+      <b>${esc(s.items[0].label)}</b>는 <b>${esc(s.items.at(-1).label)}</b>보다
+      하루 <b class="num">${won(s.gap)}</b> 더 지출합니다.
+      이번 달 ${esc(s.items[0].label)}가 ${s.items[0].days}일이므로
+      <b class="num">${won(s.gap * s.items[0].days)}</b> 차이입니다.</div>` : ''}
   </div>`;
 }
 
 function txRow(r) {
   const open = editTxn === r.id;
-  const cat = r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 아직 안 정함';
-  const note = [cat, r.cardName, r.counted ? '' : '예산에서 뺌',
+  const cat = r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 미분류';
+  const note = [cat, r.cardName, r.counted ? '' : '예산 제외',
                 ...(r.tags || []).map((t) => `#${t}`), r.memo].filter(Boolean).join(' · ');
 
   let h = `<button type="button" class="tx${r.counted ? '' : ' off'}"
     data-tx="${r.id}" aria-expanded="${open}">
     <span class="grow">
-      <span class="tx-name">${esc(r.merchantRaw || '(가게 이름 없음)')}</span>
+      <span class="tx-name">${esc(r.merchantRaw || '(가맹점 미상)')}</span>
       <span class="muted">${esc(note)}</span></span>
     <span class="tx-amt">${won(r.net)}</span></button>`;
   return open ? h + txEdit(r) : h;
@@ -1017,31 +1014,31 @@ function txEdit(r) {
   const same = sweepCount(r, scopes[0]);
 
   let h = `<div class="edit">
-    <div class="lbl" style="margin-bottom:9px">카테고리 바꾸기</div>
+    <div class="lbl" style="margin-bottom:9px">카테고리 변경</div>
     ${renderPicker(r, null, 'hist', r.categoryId || '')}
-    <div class="field" style="margin:13px 0 0"><label>다음부터 이 가게는</label>
+    <div class="field" style="margin:13px 0 0"><label>이후 이 가맹점은</label>
       <select data-scope="${r.id}">
         ${scopes.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
       </select></div>
     <label class="check" data-also style="margin:11px 0 0" ${same ? '' : 'hidden'}>
       <input type="checkbox" data-alsopast>
-      <span>이미 분류된 지난 <b data-alsocount>${same}</b>건도 같이 바꾸기</span></label>`;
+      <span>기존 <b data-alsocount>${same}</b>건도 함께 변경</span></label>`;
 
   h += `<div class="hr"></div>
     <form data-txn="${r.id}">
       <div class="fields">
         <div class="field"><label>금액</label>
           <input name="amount" inputmode="numeric" value="${won(r.amount)}"></div>
-        <div class="field"><label>가게 이름</label>
+        <div class="field"><label>가맹점</label>
           <input name="merchantRaw" value="${esc(r.merchantRaw || '')}"></div></div>
-      <div class="field"><label>태그 <span class="muted" style="font-weight:400">없어도 돼요</span></label>
+      <div class="field"><label>태그 <span class="muted" style="font-weight:400">선택</span></label>
         <input name="tags" value="${esc((r.tags || []).join(', '))}"
           placeholder="제주여행, 모임" list="tagList">
-        <div class="muted" style="margin-top:6px">쉼표로 나눠요. 카테고리는 하나만 달 수 있지만 태그는 여럿 달 수 있어요.</div></div>
-      <div class="field"><label>메모 <span class="muted" style="font-weight:400">없어도 돼요</span></label>
-        <input name="memo" value="${esc(r.memo || '')}" placeholder="누구랑, 왜" maxlength="60"></div>
+        <div class="muted" style="margin-top:6px">쉼표로 구분합니다. 카테고리는 하나, 태그는 여러 개 지정할 수 있습니다.</div></div>
+      <div class="field"><label>메모 <span class="muted" style="font-weight:400">선택</span></label>
+        <input name="memo" value="${esc(r.memo || '')}" placeholder="내용" maxlength="60"></div>
       <label class="check"><input type="checkbox" name="excludeFromBudget"
-        ${r.excludeFromBudget ? 'checked' : ''}> 이 건은 예산에서 빼기 (더치페이·환불 등)</label>
+        ${r.excludeFromBudget ? 'checked' : ''}> 예산에서 제외 (더치페이 · 환불 등)</label>
       <div style="display:flex;gap:7px">
         <button type="submit" class="act primary" style="flex:1">저장</button>
         <button type="button" class="act danger" style="min-height:44px;font-size:13.5px"
@@ -1062,7 +1059,7 @@ function renderRules() {
       .filter((m) => m.defaultCategoryId && !m.isPassthrough && !m.alwaysAsk)
       .map((m) => ({ key: m.normalizedName, kind: 'merchants', id: m.id,
                      label: m.displayName || m.normalizedName,
-                     how: '이 가게만', cat: m.defaultCategoryId })),
+                     how: '이 가맹점만', cat: m.defaultCategoryId })),
     ...D.rules
       .filter((r) => r.source === 'learned')
       .map((r) => ({ key: r.pattern, kind: 'rules', id: r.id, label: r.pattern,
@@ -1082,21 +1079,19 @@ function renderRules() {
       <select class="cat-sel" data-recat="${x.kind}:${x.id}">${catOptions(x.cat)}</select>
       <button type="button" class="act danger" data-del="${x.kind}:${x.id}">삭제</button></span></div>`;
 
-  let h = `<div class="muted" style="margin-bottom:12px">문자가 오면 이 목록을 훑어 카테고리를 정해요.
-      <b>내가 정한 것</b>을 먼저 보고, 거기 없으면 기본 규칙을 봅니다.
-      잘못 정해지는 게 있으면 여기서 바꾸거나 지우세요.</div>
-    <input id="ruleFilter" placeholder="가게 이름으로 찾기" autocomplete="off">
-    <div class="lbl" style="margin:16px 0 0">내가 정한 것 · ${mine.length}개</div>`;
+  let h = `<div class="muted" style="margin-bottom:12px">문자 수신 시 이 목록 순서로 카테고리를 판정합니다.
+      직접 등록한 규칙이 기본 규칙보다 우선합니다.</div>
+    <input id="ruleFilter" placeholder="가맹점명 검색" autocomplete="off">
+    <div class="lbl" style="margin:16px 0 0">직접 등록한 규칙 · ${mine.length}개</div>`;
 
   h += mine.length ? mine.map(row).join('')
-    : `<div class="empty">아직 없어요.<br>정리 화면이나 내역에서 카테고리를 고르면<br>여기에 쌓입니다.</div>`;
+    : `<div class="empty">등록된 규칙이 없습니다.<br>확인 화면이나 내역에서 카테고리를 지정하면<br>자동으로 등록됩니다.</div>`;
 
   h += `<details class="mini" style="margin-top:8px">
-    <summary>처음부터 들어 있던 규칙 ${builtin.length}개</summary>
+    <summary>기본 규칙 ${builtin.length}개</summary>
     ${builtin.map(row).join('')}
-    <div class="lbl" style="margin:16px 0 0">이름을 못 믿는 곳 · ${pass.length}개</div>
-    <div class="muted" style="margin-bottom:2px">간편결제는 가게 이름이 대행사로 찍혀요.
-      이런 곳은 자동으로 정하지 않고 물어봅니다.</div>
+    <div class="lbl" style="margin:16px 0 0">가맹점명을 신뢰할 수 없는 곳 · ${pass.length}개</div>
+    <div class="muted" style="margin-bottom:2px">간편결제는 가맹점명이 대행사로 표시됩니다. 자동 분류하지 않고 매번 확인합니다.</div>
     ${pass.map((m) => `<div class="item" data-rulekey="${esc(m.normalizedName)}">
       <span class="grow" style="font-size:13px;font-weight:600">${esc(m.displayName || m.normalizedName)}</span>
       <span class="acts"><button type="button" class="act danger"
@@ -1113,29 +1108,28 @@ function renderInbox() {
   let h = renderPaste() + renderCheck();
 
   if (found.length) {
-    h += `<div class="lbl" style="margin:2px 0 4px">이거 고정비 아니에요 · ${found.length}건</div>
-      <div class="muted" style="margin-bottom:9px">매달 같은 곳에 같은 금액이 나가고 있어요.
-      등록해 두면 빚 갚을 여력이 정확해져요.</div>`;
+    h += `<div class="lbl" style="margin:2px 0 4px">고정지출로 보이는 항목 · ${found.length}건</div>
+      <div class="muted" style="margin-bottom:9px">매월 같은 곳에 같은 금액이 출금되고 있습니다. 등록하면 상환 여력이 정확해집니다.</div>`;
     for (const f of found.slice(0, 6)) {
       h += `<div class="card">
         <div class="row" style="align-items:flex-start">
           <span class="grow"><span style="font-size:15px;font-weight:600">${esc(f.name)}</span><br>
-            <span class="muted">${f.months.length}달 연속 · 매월 ${f.dayOfMonth}일쯤${
-              f.spread ? ` (${f.spread}일까지 밀림)` : ''}</span></span>
+            <span class="muted">${f.months.length}개월 연속 · 매월 ${f.dayOfMonth}일경${
+              f.spread ? ` (최대 ${f.spread}일 지연)` : ''}</span></span>
           <span class="big num" style="font-size:20px">${won(f.expectedAmount)}</span></div>
         <div class="muted" style="margin-top:9px">${
           f.months.map((m, i) => `${Number(m.split('-')[1])}월 <span class="num">${won(f.amounts[i])}</span>`).join(' · ')}${
-          f.varies ? ' — 금액이 달마다 달라요 (평균으로 잡아요)' : ''}</div>
+          f.varies ? ' — 금액 변동 있음 (평균값으로 등록)' : ''}</div>
         <div style="display:flex;gap:7px;margin-top:13px">
           <button type="button" class="act primary" style="flex:1"
-            data-addfixed="${esc(f.key)}">고정비로 등록</button>
-          <button type="button" class="act ghost" data-nofixed="${esc(f.key)}">아니에요</button>
+            data-addfixed="${esc(f.key)}">고정지출로 등록</button>
+          <button type="button" class="act ghost" data-nofixed="${esc(f.key)}">해당 없음</button>
         </div></div>`;
     }
   }
 
   if (cancels.length) {
-    h += `<div class="lbl" style="margin:2px 0 9px">어느 결제를 취소한 건가요 · ${cancels.length}건</div>`;
+    h += `<div class="lbl" style="margin:2px 0 9px">취소 대상 결제 확인 · ${cancels.length}건</div>`;
     for (const c of cancels) {
       const { candidates } = findOriginal(c, D.txns);
       h += `<div class="card">
@@ -1145,35 +1139,35 @@ function renderInbox() {
           <span class="big num" style="font-size:22px">${won(c.amount)}</span></div>`;
 
       if (!candidates.length) {
-        h += `<div class="note warn" style="margin:13px 0 0">같은 금액으로 긁은 결제를 못 찾았어요.<br>
-          원래 결제가 아직 안 들어왔거나, 다른 카드일 수 있어요.</div>
+        h += `<div class="note warn" style="margin:13px 0 0">같은 금액의 결제를 찾지 못했습니다.<br>
+          원결제가 아직 수신되지 않았거나 다른 카드일 수 있습니다.</div>
           <button type="button" class="act ghost" style="width:100%;margin-top:9px"
-            data-dropcancel="${c.id}">이 취소는 치우기</button></div>`;
+            data-dropcancel="${c.id}">이 취소 건 보류</button></div>`;
         continue;
       }
 
-      h += `<div class="muted" style="margin:13px 0 7px">맞물릴 결제를 골라 주세요</div>`;
+      h += `<div class="muted" style="margin:13px 0 7px">상계할 결제를 선택하세요</div>`;
       for (const o of candidates.slice(0, 5)) {
         const days = Math.round((new Date(c.occurredAt) - new Date(o.occurredAt)) / 86400000);
         h += `<button type="button" class="item" style="width:100%;text-align:left;background:none;border-top:0;border-left:0;border-right:0;cursor:pointer"
           data-offset="${c.id}:${o.id}">
-          <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(o.merchantRaw || '(이름 없음)')}</span><br>
+          <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(o.merchantRaw || '(가맹점 미상)')}</span><br>
             <span class="muted">${esc(String(o.occurredAt).slice(5, 10))} · ${days === 0 ? '같은 날' : `${days}일 전`}${o.categoryId ? ' · ' + esc(catName(o.categoryId)) : ''}</span></span>
           <span class="num" style="font-size:14px;font-weight:600">${won(o.amount)}</span></button>`;
       }
       h += `<button type="button" class="act ghost" style="width:100%;margin-top:11px"
-        data-dropcancel="${c.id}">어느 것도 아니에요</button></div>`;
+        data-dropcancel="${c.id}">해당 없음</button></div>`;
     }
   }
 
   if (!pending.length && !unparsed.length && !cancels.length && !found.length) {
     $('inbox').innerHTML = h
-      + `<div class="card"><div class="empty">정리할 게 없어요.<br>분류하지 못한 결제가 생기면 여기에 쌓입니다.</div></div>`;
+      + `<div class="card"><div class="empty">확인할 내역이 없습니다.<br>분류되지 않은 결제가 생기면 여기에 표시됩니다.</div></div>`;
     return;
   }
 
   if (pending.length) {
-    h += `<div class="lbl" style="margin:${cancels.length || found.length ? 18 : 2}px 0 9px">어디에 쓴 돈인가요 · ${pending.length}건</div>`;
+    h += `<div class="lbl" style="margin:${cancels.length || found.length ? 18 : 2}px 0 9px">카테고리 지정 · ${pending.length}건</div>`;
     for (const t of pending) {
       const decision = classify(t.merchantRaw, {
         merchants: D.merchants, rules: D.rules, transactions: D.txns,
@@ -1189,13 +1183,13 @@ function renderInbox() {
 
       if (decision.nearby?.samples) {
         h += `<div class="note ok" style="margin:12px 0 0;padding:9px 12px">
-          전에 같은 자리에서 ${decision.nearby.samples}번 썼어요</div>`;
+          같은 위치에서 ${decision.nearby.samples}회 결제한 기록이 있습니다</div>`;
       }
 
       h += renderPicker(t, decision.nearby?.categoryId);
 
       h += `<div class="hr"></div>
-        <div class="field" style="margin:0"><label>다음부터 이 가게는</label>
+        <div class="field" style="margin:0"><label>이후 이 가맹점은</label>
           <select data-scope="${t.id}">
           ${scopeOptions(t.merchantRaw, hint).map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
           </select></div></div>`;
@@ -1203,7 +1197,7 @@ function renderInbox() {
   }
 
   if (unparsed.length) {
-    h += `<div class="lbl" style="margin:18px 0 9px">읽지 못한 문자 · ${unparsed.length}건</div>`;
+    h += `<div class="lbl" style="margin:18px 0 9px">인식하지 못한 문자 · ${unparsed.length}건</div>`;
     for (const r of unparsed) {
       h += `<form class="card" data-raw="${r.id}">
         <div class="raw">${esc(r.body)}</div>
@@ -1212,11 +1206,11 @@ function renderInbox() {
           <div class="field" style="margin:0"><label>금액</label>
             <input name="amount" inputmode="numeric" placeholder="9,900"></div>
           <div class="field" style="margin:0"><label>가맹점</label>
-            <input name="merchant" placeholder="어디서 썼나요"></div></div>
+            <input name="merchant" placeholder="가맹점"></div></div>
         <div class="field"><label>카테고리</label>
           <select name="categoryId">${catOptions()}</select></div>
         <div style="display:flex;gap:7px">
-          <button type="submit" class="act primary" style="flex:1">거래로 넣기</button>
+          <button type="submit" class="act primary" style="flex:1">내역으로 등록</button>
           <button type="button" class="act ghost" data-ignore="${r.id}">거래 아님</button>
         </div></form>`;
     }
@@ -1241,16 +1235,16 @@ function renderInbox() {
 function renderPaste() {
   return `<details class="fold" data-fold="paste" ${openFold.has('paste') ? 'open' : ''}>
     <summary><span class="fold-t">문자 붙여넣기</span>
-      <span class="fold-s">놓친 결제 채우기</span><span class="fold-x"></span></summary>
+      <span class="fold-s">누락 결제 보완</span><span class="fold-x"></span></summary>
     <div class="fold-b">
-      <div class="muted" style="margin-bottom:11px">문자 앱에서 놓친 문자를 복사해 붙여 넣으세요.
-        여러 통을 한꺼번에 넣어도 알아서 갈립니다. 이미 들어간 건 저절로 걸러져요.</div>
+      <div class="muted" style="margin-bottom:11px">메시지 앱에서 문자를 복사해 붙여 넣으세요. 여러 통을 한 번에 넣어도 자동으로 분리되며,
+        이미 등록된 건은 제외됩니다.</div>
       <form data-form="paste">
         <div class="field"><label>문자 원문</label>
           <textarea name="body" rows="5" placeholder="[Web발신]&#10;현대 이마트Plus 승인&#10;1,800원 일시불&#10;…"
             style="width:100%;font:inherit;font-size:14px;padding:11px 12px;background:#fff;
                    border:1px solid #D3DCE6;border-radius:10px;resize:vertical"></textarea></div>
-        <button type="submit" class="act primary" style="width:100%">넣기</button>
+        <button type="submit" class="act primary" style="width:100%">등록</button>
       </form></div></details>`;
 }
 
@@ -1270,12 +1264,12 @@ function renderCheck() {
   let h = '';
   for (const c of cards) {
     h += `<div class="card">
-      <div class="row"><span class="lbl grow">${esc(c.name)} — 카드사가 센 것과 달라요</span></div>
+      <div class="row"><span class="lbl grow">${esc(c.name)} — 카드사 기록과 다름</span></div>
       <div class="row" style="padding:7px 0">
         <span class="grow" style="font-size:13px;color:var(--ink2)">카드사 누적</span>
         <span class="num" style="font-size:14px;font-weight:600">${won(c.reported)}</span></div>
       <div class="row" style="padding:7px 0">
-        <span class="grow" style="font-size:13px;color:var(--ink2)">우리가 센 것</span>
+        <span class="grow" style="font-size:13px;color:var(--ink2)">앱에서 집계한 금액</span>
         <span class="num" style="font-size:14px;font-weight:600">${won(c.counted)}</span></div>
       ${/* 카드사 누적에는 지난달에서 넘어온 이월잔액이 얹혀 있다. 빼 두지 않으면
            그만큼이 통째로 "놓친 결제"로 보인다. */''}
@@ -1284,30 +1278,29 @@ function renderCheck() {
         <span class="num" style="font-size:14px;font-weight:600">${won(c.carried)}</span></div>` : ''}
       <div class="hr"></div>
       <div class="row">
-        <span class="grow" style="font-size:13.5px;font-weight:600">${c.missing ? '안 들어온 결제' : '더 들어온 결제'}</span>
+        <span class="grow" style="font-size:13.5px;font-weight:600">${c.missing ? '미수신 결제' : '과다 집계'}</span>
         <span class="big num" style="font-size:22px;color:var(--warn-mark)">${won(Math.abs(c.gap))}</span></div>
       <div class="note ${c.missing ? 'warn' : 'ok'}" style="margin:13px 0 0">${c.missing
-        ? `문자가 안 온 결제가 <b class="num">${won(c.missing)}</b>어치 있어요.
-           위에서 그 문자를 붙여 넣으면 채워집니다.`
-        : `우리 쪽에 <b class="num">${won(c.extra)}</b>이 더 잡혀 있어요.
-           취소된 건이 안 지워졌거나 같은 결제가 두 번 들어왔을 수 있어요.`}
+        ? `문자가 수신되지 않은 결제가 <b class="num">${won(c.missing)}</b> 있습니다.
+           위에서 해당 문자를 붙여 넣으면 보완됩니다.`
+        : `앱에 <b class="num">${won(c.extra)}</b>이 더 집계돼 있습니다.
+           취소 건이 반영되지 않았거나 같은 결제가 중복 등록됐을 수 있습니다.`}
         <br><span class="muted">${esc(String(c.at).slice(5, 16).replace('T', ' '))} 문자 기준</span></div>
       </div>`;
   }
 
   for (const b of banks) {
     h += `<div class="card">
-      <div class="row"><span class="lbl grow">${esc(b.name)} 잔고가 오래됐어요</span></div>
+      <div class="row"><span class="lbl grow">${esc(b.name)} 잔액이 최신이 아님</span></div>
       <div class="row" style="padding:9px 0">
-        <span class="grow" style="font-size:13px;color:var(--ink2)">문자에 찍힌 잔액</span>
+        <span class="grow" style="font-size:13px;color:var(--ink2)">문자에 표시된 잔액</span>
         <span class="num" style="font-size:16px;font-weight:700">${won(b.reported)}</span></div>
       <div class="row" style="padding:0 0 9px">
-        <span class="grow" style="font-size:13px;color:var(--ink2)">앱에 적힌 것</span>
+        <span class="grow" style="font-size:13px;color:var(--ink2)">앱에 등록된 잔액</span>
         <span class="num" style="font-size:14px;font-weight:600;color:var(--ink3)">${won(b.held)}</span></div>
       <button type="button" class="act primary" style="width:100%"
-        data-syncbal="${b.accountId}:${b.reported}">문자에 찍힌 값으로 맞추기</button>
-      <div class="muted" style="margin-top:9px">${esc(String(b.at).slice(5, 16).replace('T', ' '))} 문자예요.
-        은행이 센 숫자라 이게 정답이에요.</div></div>`;
+        data-syncbal="${b.accountId}:${b.reported}">문자 기준으로 갱신</button>
+      <div class="muted" style="margin-top:9px">${esc(String(b.at).slice(5, 16).replace('T', ' '))} 수신 문자 기준입니다.</div></div>`;
   }
   return h;
 }
@@ -1375,10 +1368,10 @@ function scopeOptions(merchantRaw, hint) {
   const normalized = normalizeMerchant(merchantRaw);
   const out = [];
   if (hint.scope === 'contains' && hint.keyword && hint.keyword !== normalized) {
-    out.push(`모두: ${hint.keyword}`);
+    out.push(`전체: ${hint.keyword}`);
   }
-  if (normalized) out.push(`이 가게만: ${normalized}`);
-  out.push('이번만');
+  if (normalized) out.push(`이 가맹점만: ${normalized}`);
+  out.push('이번만 적용');
   return out;
 }
 
@@ -1500,34 +1493,34 @@ function renderSetup() {
              + D.rules.filter((r) => r.source === 'learned').length;
 
   const income = `<form data-form="settings">
-    <div class="field"><label>매달 들어오는 돈</label>
+    <div class="field"><label>월 수입</label>
       <input name="monthlyIncome" inputmode="numeric" value="${won(s.monthlyIncome)}"></div>
     <div class="field"><label>생활비 예산</label>
       <input name="variableBudget" inputmode="numeric" value="${won(s.variableBudget)}">
-      <div class="muted" style="margin-top:6px">매달 나가는 고정비 말고, 그때그때 쓰는 돈이에요. 감으로 잡고 나중에 고쳐도 됩니다.</div></div>
+      <div class="muted" style="margin-top:6px">고정지출을 제외한 변동 지출 예산입니다.</div></div>
     <div class="hr"></div>
     <div class="fields">
-      <div class="field"><label>처음 빚 금액</label>
+      <div class="field"><label>초기 부채 금액</label>
         <input name="debtStartAmount" inputmode="numeric" value="${won(s.debtStartAmount)}"></div>
-      <div class="field"><label>다 갚을 날</label>
+      <div class="field"><label>상환 목표일</label>
         <input name="debtTargetDate" type="date" value="${esc(s.debtTargetDate || '')}"></div></div>
-    <div class="muted" style="margin:-4px 0 12px">얼마나 갚았는지를 이 금액에 견줘 보여줍니다. 비우면 지금 잔액이 기준이 돼요.</div>
+    <div class="muted" style="margin:-4px 0 12px">상환 진행률의 기준 금액입니다. 비우면 현재 잔액이 기준이 됩니다.</div>
     <div class="hr"></div>
     <div class="fields">
-      <div class="field"><label>한 달을 언제부터 셀까</label>
+      <div class="field"><label>결산 시작일</label>
         <select name="cycleStartDay">
           ${Array.from({ length: 28 }, (_, i) => i + 1).map((d) =>
             `<option value="${d}"${Number(s.cycleStartDay || 1) === d ? ' selected' : ''}>${d}일부터</option>`).join('')}
         </select></div>
-      <div class="field"><label>쉬는 날이면</label>
+      <div class="field"><label>휴일에 걸리면</label>
         <select name="cycleMode">
           <option value="calendar"${s.cycleMode !== 'payday' ? ' selected' : ''}>그대로</option>
-          <option value="payday"${s.cycleMode === 'payday' ? ' selected' : ''}>앞당김 (월급날)</option>
+          <option value="payday"${s.cycleMode === 'payday' ? ' selected' : ''}>앞당김 (급여일 기준)</option>
         </select></div></div>
     <div class="muted" style="margin:-4px 0 12px">
-      <b>월급날</b>로 맞추면 "쓸 수 있는 돈"이 지갑 현실과 맞아요.
-      월급날이 쉬는 날이면 돈은 앞당겨 들어오니 주기도 같이 당겨집니다.
-      <b>1일</b>로 두면 달력 월이라 지난달과 견주기 좋고요.</div>
+<b>급여일 기준</b>으로 맞추면 사용 가능액이 실제 잔고와 일치합니다.
+      급여일이 휴일이면 입금이 앞당겨지므로 주기도 함께 당겨집니다.
+      <b>1일</b>로 두면 달력 월 기준이라 지난달과 비교하기 좋습니다.</div>
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
 
   const line = (a, amount, note) => `<div class="item"><span class="grow">
@@ -1535,7 +1528,7 @@ function renderSetup() {
       <span class="muted">${esc(note)}</span></span>
       <span class="num" style="font-size:14px;font-weight:600">${won(amount)}</span>
       <span class="acts">
-        <button type="button" class="act ghost small" data-edit="accounts:${a.id}">고치기</button>
+        <button type="button" class="act ghost small" data-edit="accounts:${a.id}">수정</button>
         <button type="button" class="act danger" data-del="accounts:${a.id}">삭제</button></span></div>`;
 
   const all = D.accounts.filter((a) => a.active !== false);
@@ -1545,39 +1538,41 @@ function renderSetup() {
 
   const money = (cashRows.length
     ? cashRows.map((a) => line(a, cashOf(a),
-        [TYPE_LABEL[a.type], Number(a.balance) < 0 ? '마이너스통장 — 빚으로 셉니다' : ''].filter(Boolean).join(' · ')))
+        [TYPE_LABEL[a.type], Number(a.balance) < 0 ? '마이너스통장 — 부채로 집계' : ''].filter(Boolean).join(' · ')))
         .join('')
-    : '<div class="empty">아직 없어요.</div>')
-    + `<div class="muted" style="margin-top:10px">통장 잔고는 입출금 문자가 올 때마다 알아서 맞춰져요. 적금·청약처럼 문자가 안 오는 건 직접 넣어 주세요.</div>`;
+    : '<div class="empty">등록된 항목이 없습니다.</div>')
+    + `<div class="muted" style="margin-top:10px">통장 잔액은 입출금 문자 수신 시 자동으로 갱신됩니다.
+       적금 · 청약처럼 문자가 오지 않는 항목은 직접 입력하세요.</div>`;
 
   const debts = debtRows.length
     ? debtRows.map((a) => line(a, debtOf(a),
         `${TYPE_LABEL[a.type]} · 연 ${Number(a.rate) || 0}%${a.billingDay ? ` · 매월 ${a.billingDay}일` : ''}`)).join('')
-      + `<div class="muted" style="margin-top:10px">이자율을 넣으면 홈에서 비싼 빚부터 갚으라고 알려줘요.</div>`
-    : '<div class="empty">없어요. 다행이네요.</div>';
+      + `<div class="muted" style="margin-top:10px">이자율을 등록하면 이자가 높은 순으로 상환 순서를 안내합니다.</div>`
+    : '<div class="empty">등록된 부채가 없습니다.</div>';
 
   const cards = (cardRows.length
     ? cardRows.map((a) => line(a, 0,
         `${CARD_LABEL[a.cardType] || '신용'}${a.billingDay ? ` · 매월 ${a.billingDay}일 결제` : ''}${a.issuer ? ` · ${a.issuer}` : ''}`)
         .replace(/<span class="num"[^>]*>0<\/span>/, ''))
       .join('')
-    : '<div class="empty">아직 없어요.</div>')
-    + `<div class="muted" style="margin-top:10px">카드를 넣어 두면 다음 결제일에 얼마 나갈지 홈에서 알려줘요. 체크카드는 그 자리에서 빠지니 청구가 안 생깁니다.</div>`;
+    : '<div class="empty">등록된 카드가 없습니다.</div>')
+    + `<div class="muted" style="margin-top:10px">카드를 등록하면 다음 결제일의 청구액을 홈에서 확인할 수 있습니다.
+       체크카드는 즉시 출금되므로 청구가 발생하지 않습니다.</div>`;
 
   const bankOptions = all.filter((a) => a.type === 'checking')
     .map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   const cardOptions = cardRows.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   const groupOptions = all.filter((a) => a.type === 'card' || a.type === 'checking')
-    .map((a) => `<option value="${a.id}">${esc(a.name)} 와 함께</option>`).join('');
+    .map((a) => `<option value="${a.id}">${esc(a.name)} 와 묶기</option>`).join('');
 
   const form = `<form data-form="accounts">
     <input type="hidden" name="id">
-    <div class="field"><label>무엇인가요</label>
+    <div class="field"><label>종류</label>
       <select name="type">
         <option value="checking">입출금 통장 (마이너스통장 포함)</option>
         <option value="savings">저축 · 투자</option>
         <option value="card">카드</option>
-        <option value="loan">빚 — 리볼빙 · 대출</option>
+        <option value="loan">부채 — 리볼빙 · 대출</option>
         <option value="cash">현금</option></select></div>
     <div class="field"><label>이름</label>
       <input name="name" placeholder="우리은행 · 현대 이마트Plus · 리볼빙" required></div>
@@ -1588,13 +1583,11 @@ function renderSetup() {
       <div class="field" data-when="checking loan">
         <label id="rateLabel">이자율 (연 %)</label>
         <input name="rate" inputmode="decimal" placeholder="19.9"></div>
-      <div class="field" data-when="checking"><label>플러스일 때 (연 %)</label>
+      <div class="field" data-when="checking"><label>잔액이 양수일 때 (연 %)</label>
         <input name="ratePlus" inputmode="decimal" placeholder="0.1"></div></div>
     <label class="check" data-when="checking" style="margin:-2px 0 12px">
       <input type="checkbox" name="isMinus">
-      <span>지금 마이너스예요 — 그만큼이 빚으로 잡힙니다</span></label>
-    <div class="muted" data-when="checking" style="margin:-4px 0 12px">
-      마통이라고 늘 마이너스인 건 아니죠. 플러스일 땐 이자를 받으니 둘 다 넣을 수 있어요.</div>
+      <span>현재 마이너스 — 해당 금액이 부채로 집계됩니다</span></label>
 
     <div class="fields" data-when="card">
       <div class="field"><label>카드 종류</label>
@@ -1604,34 +1597,34 @@ function renderSetup() {
           <option value="hybrid">체크 + 신용</option></select></div>
       <div class="field"><label>결제일</label>
         <input name="billingDay" inputmode="numeric" placeholder="10"></div></div>
-    <div class="field" data-when="card"><label>어느 통장에서 빠지나요</label>
-      <select name="payFromId"><option value="">안 정함</option>${bankOptions}</select></div>
+    <div class="field" data-when="card"><label>출금 통장</label>
+      <select name="payFromId"><option value="">지정 안 함</option>${bankOptions}</select></div>
     <div class="field" data-when="card"><label>청구서를 함께 쓰는 카드</label>
-      <select name="statementWith"><option value="">따로 청구돼요</option>${groupOptions}</select>
-      <div class="muted" style="margin-top:6px">현대카드는 카드가 둘이어도 <b>누적을 합쳐</b> 찍어요.
-        묶어 두면 청구서 한 장으로 세고 대조도 맞습니다. 체크카드와 통장도 마찬가지예요.</div></div>
+      <select name="statementWith"><option value="">별도 청구</option>${groupOptions}</select>
+      <div class="muted" style="margin-top:6px">현대카드는 여러 장이어도 <b>누적 사용액을 합산</b>해 표시합니다.
+        묶어 두면 청구서 한 장으로 집계되고 대조도 맞습니다.</div></div>
 
     <label class="check" data-when="card" style="margin:0 0 12px">
       <input type="checkbox" name="revolving">
-      <span>리볼빙을 쓰고 있어요</span></label>
+      <span>리볼빙 사용 중</span></label>
     <div class="fields" data-when="card revolving">
-      <div class="field"><label>이번 달 결제 비율 (%)</label>
+      <div class="field"><label>약정 결제 비율 (%)</label>
         <input name="revolvingRatio" inputmode="numeric" placeholder="30"></div>
       <div class="field"><label>리볼빙 이자율 (연 %)</label>
         <input name="revolvingRate" inputmode="decimal" placeholder="19.9"></div></div>
-    <div class="field" data-when="card revolving"><label>지금 이월돼 있는 금액</label>
+    <div class="field" data-when="card revolving"><label>현재 이월잔액</label>
       <input name="revolvingBalance" inputmode="numeric" placeholder="2,180,000">
-      <div class="muted" style="margin-top:6px">카드사 앱에 적힌 <b>이월잔액</b>이에요.
-        카드사가 정하는 숫자라 앱이 셀 수 없어서 직접 넣어야 해요. 이만큼이 빚으로 잡힙니다.</div></div>
+      <div class="muted" style="margin-top:6px">카드사 앱에 표시된 <b>이월잔액</b>입니다. 카드사가 산정하는 금액이라 직접 입력해야 합니다.
+        이 금액이 부채로 집계됩니다.</div></div>
 
-    <div class="field" data-when="loan"><label>무엇과 엮인 빚인가요</label>
-      <select name="linkedAccountId"><option value="">엮인 데 없음</option>${cardOptions}</select></div>
+    <div class="field" data-when="loan"><label>연결된 카드</label>
+      <select name="linkedAccountId"><option value="">연결 없음</option>${cardOptions}</select></div>
 
     <button type="submit" class="act primary" style="width:100%">저장</button>
-    <div class="muted" style="margin-top:10px">위 목록에서 <b>고치기</b> 를 누르면 여기로 불러와요.</div></form>`;
+    <div class="muted" style="margin-top:10px">위 목록에서 <b>수정</b>을 누르면 여기로 불러옵니다.</div></form>`;
 
   const ingest = `<form data-form="ingestUrl">
-    <div class="muted" style="margin-bottom:10px">이 화면 주소와 달라요. 아이폰 단축어가 문자를 보낼 곳입니다. 바뀌었을 때만 고치면 돼요.</div>
+    <div class="muted" style="margin-bottom:10px">아이폰 단축어가 문자를 전송할 주소입니다. 이 화면의 주소와는 다릅니다.</div>
     <div class="field"><label>주소</label>
       <input name="url" inputmode="url" placeholder="https://ingest-xxxx-du.a.run.app"
         value="${esc(ingestUrl())}"></div>
@@ -1641,25 +1634,24 @@ function renderSetup() {
     </div></form>
     <div class="hr"></div>
     <form data-form="token">
-      <div class="muted" style="margin-bottom:12px">아이폰 단축어는 새벽에 주머니 속에서 혼자 돌아 로그인을 할 수 없어요. 그래서 미리 정해 둔 비밀번호로 들어옵니다. 이걸로는 <b>문자를 넣는 것만</b> 되고 가계부를 읽지는 못해요.</div>
+      <div class="muted" style="margin-bottom:12px">단축어는 로그인 없이 동작하므로 미리 정한 비밀번호로 인증합니다.
+        이 비밀번호로는 <b>문자 등록만</b> 가능하고 내역을 읽을 수는 없습니다.</div>
       <div class="field"><label>연결 비밀번호</label>
         <input name="token" type="password" autocomplete="new-password" placeholder="8자 이상" required></div>
       <button type="submit" class="act primary" style="width:100%">비밀번호 저장</button>
-      <div class="note warn" style="margin:12px 0 0">바꾸면 아이폰 <b>단축어의 token 칸도</b> 같이 고쳐야 문자가 계속 들어와요.</div></form>
+      <div class="note warn" style="margin:12px 0 0">변경하면 단축어의 <b>token</b> 값도 함께 수정해야 합니다.</div></form>
     <div class="hr"></div>
     <form data-form="widgetToken">
-      <div class="muted" style="margin-bottom:12px">잠금화면 위젯이 쓰는 비밀번호예요.
-        문자 넣는 것과 <b>다른 비밀번호</b>를 쓰는 이유는, 넣는 쪽이 읽기까지 되면
-        단축어 설정 하나가 새는 것과 가계부 전체가 새는 것이 같은 일이 되기 때문이에요.
-        이걸로는 <b>합계 몇 개만</b> 읽히고 어디서 얼마 썼는지는 안 나갑니다.</div>
+      <div class="muted" style="margin-bottom:12px">위젯이 사용하는 비밀번호입니다. 문자 등록용과 <b>다른 비밀번호</b>를 쓰는 이유는,
+        등록용으로 읽기까지 가능해지면 단축어 설정 유출이 곧 전체 내역 유출이 되기 때문입니다.
+        이 비밀번호로는 <b>합계 값만</b> 조회되며 가맹점 정보는 전달되지 않습니다.</div>
       <div class="field"><label>위젯 비밀번호</label>
         <input name="widgetToken" type="password" autocomplete="new-password" placeholder="8자 이상" required></div>
       <button type="submit" class="act primary" style="width:100%">위젯 비밀번호 저장</button>
-      ${D.ingest?.widgetToken ? '<div class="note ok" style="margin:12px 0 0">정해져 있어요. Scriptable 위젯에 같은 값을 넣으세요.</div>' : ''}
+      ${D.ingest?.widgetToken ? '<div class="note ok" style="margin:12px 0 0">설정됨. Scriptable 위젯에 같은 값을 입력하세요.</div>' : ''}
     </form>`;
 
-  const etc = `<div class="muted" style="margin-bottom:10px">내보내면 엑셀이나 다른 가계부에서 열 수 있어요.
-      데이터가 이 앱 안에만 있으면 앱이 인질을 잡고 있는 거니까요.</div>
+  const etc = `<div class="muted" style="margin-bottom:10px">엑셀이나 다른 가계부에서 열 수 있는 형식으로 내보냅니다.</div>
     <button type="button" class="act tint" style="width:100%;margin-bottom:9px" id="exportCsv">
       내역 내보내기 (CSV)</button>
     <div style="display:flex;gap:7px">
@@ -1672,39 +1664,39 @@ function renderSetup() {
 
   // 설정은 한 벌로 늘어놓으면 열한 칸이라 찾을 수가 없다. 큰 갈래로 한 번 묶는다.
   $('setup').innerHTML = [
-    group('money', '돈', `순자산 ${net < 0 ? '−' : ''}${won(Math.abs(net))}`, [
-      fold('assets', '가진 돈',
-        cashRows.length ? `${cashRows.length}개 · ${won(D.ledger.assets.total)}` : '없음', money),
-      fold('debts', '빚',
-        debtRows.length ? `${debtRows.length}개 · ${won(D.ledger.debt.total)}` : '없음', debts),
+    group('money', '자산 · 부채', `순자산 ${net < 0 ? '−' : ''}${won(Math.abs(net))}`, [
+      fold('assets', '자산',
+        cashRows.length ? `${cashRows.length}개 · ${won(D.ledger.assets.total)}` : '미등록', money),
+      fold('debts', '부채',
+        debtRows.length ? `${debtRows.length}개 · ${won(D.ledger.debt.total)}` : '미등록', debts),
       fold('cards', '카드',
-        cardRows.length ? `${cardRows.length}장` : '없음', cards),
-      fold('add', '계좌 · 카드 · 빚 넣기', '한 군데서 다 넣어요', form),
+        cardRows.length ? `${cardRows.length}장` : '미등록', cards),
+      fold('add', '계좌 · 카드 · 부채 등록', '', form),
     ]),
-    group('plan', '계획', s.monthlyIncome ? `매달 ${won(s.monthlyIncome)}` : '아직 안 잡음', [
+    group('plan', '계획', s.monthlyIncome ? `월 ${won(s.monthlyIncome)}` : '미설정', [
       fold('goal', '목표', goalSummary(), goalForm()),
       fold('income', '수입과 예산',
-        s.monthlyIncome ? `들어옴 ${won(s.monthlyIncome)} · 생활비 ${won(s.variableBudget)}` : '아직 안 넣음', income),
-      fold('catbudget', '갈래별 예산',
+        s.monthlyIncome ? `수입 ${won(s.monthlyIncome)} · 생활비 ${won(s.variableBudget)}` : '미등록', income),
+      fold('catbudget', '카테고리별 예산',
         D.ledger.byCategory.withLimit.length
           ? `${D.ledger.byCategory.withLimit.length}개 · ${won(D.ledger.byCategory.limitTotal)}`
-          : '안 잡음', renderCategoryBudgets()),
+          : '미설정', renderCategoryBudgets()),
     ]),
-    group('sort', '분류', `카테고리 ${cats.length} · 내 규칙 ${mine}`, [
+    group('sort', '분류', `카테고리 ${cats.length} · 직접 등록 ${mine}`, [
       fold('cats', '카테고리',
-        `큰 갈래 ${cats.filter((c) => !c.parentId).length} · 하위 ${cats.filter((c) => c.parentId).length}`,
+        `상위 ${cats.filter((c) => !c.parentId).length} · 하위 ${cats.filter((c) => c.parentId).length}`,
         renderCategories()),
-      fold('rules', '자동 분류 규칙', `내가 정한 것 ${mine}개`, renderRules()),
+      fold('rules', '자동 분류 규칙', `직접 등록 ${mine}개`, renderRules()),
     ]),
-    group('me', '나', Object.keys(D.shifts).length ? `근무표 ${Object.keys(D.shifts).length}일` : '', [
+    group('me', '개인 설정', Object.keys(D.shifts).length ? `근무표 ${Object.keys(D.shifts).length}일` : '', [
       fold('shifts', '근무표',
-        Object.keys(D.shifts).length ? `${Object.keys(D.shifts).length}일 넣음` : '안 넣음',
+        Object.keys(D.shifts).length ? `${Object.keys(D.shifts).length}일 등록` : '미등록',
         renderShiftForm()),
     ]),
     group('link', '연결', '문자 · 위젯', [
-      fold('ingest', '문자 연결', '단축어가 문자를 보내는 곳', ingest),
+      fold('ingest', '문자 연결', '단축어 전송 주소', ingest),
     ]),
-    group('etcg', '그 밖에', '', [
+    group('etcg', '기타', '', [
       fold('etc', '내보내기 · 로그아웃', '', etc),
     ]),
   ].join('');
@@ -1736,9 +1728,9 @@ function group(key, title, summary, inner) {
  * 어느 화면에서든 누를 수 있어야 실제로 쓴다.
  */
 const QUICK_LABEL = {
-  expense: { what: '어디에 썼나요', from: '어디서 나갔나요', to: '' },
-  income: { what: '무엇으로 받았나요', from: '', to: '어디로 들어왔나요' },
-  transfer: { what: '무엇을 옮겼나요', from: '어디서 뺐나요', to: '어디로 옮겼나요' },
+  expense: { what: '지출처', from: '출금 계좌 · 카드', to: '' },
+  income: { what: '수입 내용', from: '', to: '입금 계좌' },
+  transfer: { what: '이체 내용', from: '출금 계좌', to: '입금 계좌' },
 };
 
 function quickKind() {
@@ -1779,15 +1771,15 @@ function syncQuick() {
     .filter((c) => !c.hidden && c.kind === (kind === 'income' ? 'income' : 'expense'))
     .sort(byOrder);
   form.elements.categoryId.innerHTML = kind === 'income'
-    ? `<option value="">고르지 않음</option>`
+    ? `<option value="">지정 안 함</option>`
       + cats.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')
     : catOptions();
 
   const live = D.accounts.filter((a) => a.active !== false);
   const opts = (list, none) => `<option value="">${none}</option>`
     + list.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
-  form.elements.accountId.innerHTML = opts(live, '안 정함');
-  form.elements.toAccountId.innerHTML = opts(live, '안 정함');
+  form.elements.accountId.innerHTML = opts(live, '지정 안 함');
+  form.elements.toAccountId.innerHTML = opts(live, '지정 안 함');
 }
 
 /** 통장에 결제일이 있을 리 없고 카드에 이자율이 있을 리 없다. 쓰는 칸만 보인다. */
@@ -1808,7 +1800,7 @@ function syncAccountForm() {
   const revolving = form.elements.revolving?.checked === true;
   const rateLabel = form.querySelector('#rateLabel');
   if (rateLabel) {
-    rateLabel.textContent = type === 'checking' ? '마이너스일 때 (연 %)' : '이자율 (연 %)';
+    rateLabel.textContent = type === 'checking' ? '잔액이 음수일 때 (연 %)' : '이자율 (연 %)';
   }
   for (const el of form.querySelectorAll('[data-when]')) {
     const want = el.dataset.when.split(' ');
@@ -1820,7 +1812,7 @@ function syncAccountForm() {
 
 const goalSummary = () => {
   const g = D.ledger.goal;
-  if (g.kind === 'keep') return '아직 없음';
+  if (g.kind === 'keep') return '미설정';
   return `${g.name} · ${g.pct}%`;
 };
 
@@ -1833,7 +1825,7 @@ const goalSummary = () => {
 function goalForm() {
   const g = D.settings.goal || {
     kind: D.ledger.debt.total ? 'payoff' : 'keep',
-    name: '빚 정리',
+    name: '부채 상환',
     startAmount: D.settings.debtStartAmount || 0,
     targetAmount: 0,
     targetDate: D.settings.debtTargetDate || '',
@@ -1842,11 +1834,11 @@ function goalForm() {
     `<option value="${v}"${g.kind === v ? ' selected' : ''}>${label}${note ? ` — ${note}` : ''}</option>`;
 
   return `<form data-form="goal">
-    <div class="field"><label>무엇을 할 건가요</label>
+    <div class="field"><label>목표 종류</label>
       <select name="kind">
-        ${pick('payoff', '빚 갚기', '0 원까지')}
-        ${pick('save', '모으기', '목표 금액까지')}
-        ${pick('keep', '지켜보기', '목표 없이')}</select></div>
+        ${pick('payoff', '부채 상환', '0원까지')}
+        ${pick('save', '저축', '목표 금액까지')}
+        ${pick('keep', '기록만', '목표 없이')}</select></div>
     <div class="field" data-goalwhen="payoff save"><label>이름</label>
       <input name="name" value="${esc(g.name || '')}" placeholder="리볼빙 정리 · 비상금 300만원"></div>
     <div class="fields" data-goalwhen="payoff save">
@@ -1854,14 +1846,14 @@ function goalForm() {
         <input name="startAmount" inputmode="numeric" value="${won(g.startAmount)}"></div>
       <div class="field" data-goalwhen="save"><label>목표 금액</label>
         <input name="targetAmount" inputmode="numeric" value="${won(g.targetAmount)}"></div></div>
-    <div class="field" data-goalwhen="payoff save"><label>언제까지</label>
+    <div class="field" data-goalwhen="payoff save"><label>목표 날짜</label>
       <input name="targetDate" type="date" value="${esc(g.targetDate || '')}"></div>
     <div class="muted" data-goalwhen="payoff save" style="margin:-4px 0 12px">
-      진행률을 시작 금액에 견줘 보여줍니다. 날짜를 정하면 속도가 맞는지도 알려드려요.</div>
+      진행률은 시작 금액 대비로 표시됩니다. 날짜를 지정하면 달성 가능 여부도 안내합니다.</div>
 
     <div class="hr"></div>
     <label class="check"><input type="checkbox" name="privacy" ${privacyOn() ? 'checked' : ''}>
-      <span>금액 가리기 — 켜 두면 흐리게 보이고, 위쪽 눈 버튼으로 ${PEEK_SECONDS}초간 볼 수 있어요</span></label>
+      <span>금액 가리기 — 화면의 금액을 흐리게 표시하고, 상단 버튼으로 ${PEEK_SECONDS}초간 확인합니다</span></label>
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
 }
 
@@ -1874,7 +1866,7 @@ function syncGoalForm() {
     el.hidden = !el.dataset.goalwhen.split(' ').includes(kind);
   }
   const label = form.querySelector('[data-goalstart]');
-  if (label) label.textContent = kind === 'payoff' ? '시작 금액 (처음 빚)' : '시작 금액 (지금까지 모은 돈)';
+  if (label) label.textContent = kind === 'payoff' ? '시작 금액 (초기 부채)' : '시작 금액 (현재 적립액)';
 }
 
 function fold(key, title, summary, body) {
@@ -1884,7 +1876,7 @@ function fold(key, title, summary, body) {
     <div class="fold-b">${body}</div></details>`;
 }
 
-const KIND_LABEL = { expense: '지출', income: '수입', transfer: '옮김' };
+const KIND_LABEL = { expense: '지출', income: '수입', transfer: '이체' };
 
 /**
  * 근무표 넣기.
@@ -1900,19 +1892,17 @@ function renderShiftForm() {
   return `<form data-form="shifts">
     <input type="hidden" name="month" value="${month}">
     <div class="muted" style="margin-bottom:12px">
-      <b>${Number(y)}년 ${Number(m)}월</b> 근무를 1일부터 차례로 적어 주세요.
+      <b>${Number(y)}년 ${Number(m)}월</b> 근무를 1일부터 순서대로 입력하세요.<br>
       <b>D</b> 데이 · <b>E</b> 이브닝 · <b>N</b> 나이트 · <b>O</b> 오프.
-      띄어 써도 되고 한글(데·이·나·오)로 적어도 돼요.
-      <br>내역 화면에서 달을 옮기면 그 달 근무표를 넣을 수 있어요.</div>
+      한글(데 · 이 · 나 · 오)도 가능합니다.</div>
     <div class="field"><label>근무</label>
       <input name="text" value="${esc(now.replace(/·/g, ''))}"
         placeholder="DDEENNOODDEENNOO…" autocapitalize="characters" autocomplete="off"
         style="font-family:ui-monospace,monospace;letter-spacing:2px"></div>
-    <div class="muted" style="margin:-4px 0 12px">지금 넣은 것: <span
+    <div class="muted" style="margin:-4px 0 12px">입력된 근무: <span
       style="font-family:ui-monospace,monospace;letter-spacing:1px">${esc(now)}</span></div>
     <button type="submit" class="act primary" style="width:100%">저장</button>
-    <div class="note ok" style="margin:12px 0 0">새벽 8시 전에 쓴 돈은 <b>앞날 근무</b>로 셉니다.
-      나이트 도중에 산 커피는 그 나이트에 쓴 돈이니까요.</div></form>`;
+    <div class="note ok" style="margin:12px 0 0">오전 8시 이전 지출은 <b>전날 근무</b>로 집계합니다.</div></form>`;
 }
 
 /**
@@ -1927,27 +1917,26 @@ function renderCategoryBudgets() {
   const sum = mainCats().reduce((s, c) => s + Number(limits[c.id] || 0), 0);
   const total = Number(D.settings.variableBudget || 0);
 
-  let h = `<div class="muted" style="margin-bottom:12px">잡은 갈래는 내역 화면에서 예산에 견줘 보여줘요.
-    안 잡은 갈래는 그냥 쓴 금액만 나옵니다. 전부 잡을 필요 없어요 — 잘 새는 데만 잡으면 돼요.</div>
+  let h = `<div class="muted" style="margin-bottom:12px">예산을 설정한 카테고리는 내역 화면에서 예산 대비로 표시됩니다. 전부 설정할 필요는 없습니다.</div>
     <form data-form="catbudget">`;
 
   for (const c of mainCats()) {
     const now = Number(used[c.id] || 0);
     h += `<div class="item">
       <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(c.icon || '')} ${esc(c.name)}</span><br>
-        <span class="muted">이 달에 <span class="num">${won(now)}</span> 씀</span></span>
-      <span class="acts"><input name="${c.id}" inputmode="numeric" placeholder="안 잡음"
+        <span class="muted">이번 달 <span class="num">${won(now)}</span></span></span>
+      <span class="acts"><input name="${c.id}" inputmode="numeric" placeholder="미설정"
         value="${limits[c.id] ? won(limits[c.id]) : ''}"
         style="width:110px;min-height:38px;font-size:13px;text-align:right"></span></div>`;
   }
 
   h += `<div class="hr"></div>
     <div class="row" style="margin-bottom:12px">
-      <span class="grow" style="font-size:13px;font-weight:600">잡은 예산 합</span>
+      <span class="grow" style="font-size:13px;font-weight:600">설정한 예산 합계</span>
       <span class="num" style="font-size:14px;font-weight:700;color:${
         total && sum > total ? 'var(--warn-mark)' : 'var(--ink)'}">${won(sum)}</span></div>
-    ${total ? `<div class="muted" style="margin:-6px 0 12px">생활비 예산은 <span class="num">${won(total)}</span>이에요${
-      sum > total ? ' — 갈래별로 잡은 게 더 많아요.' : '.'}</div>` : ''}
+    ${total ? `<div class="muted" style="margin:-6px 0 12px">생활비 예산은 <span class="num">${won(total)}</span>입니다${
+      sum > total ? ' — 카테고리별 합계가 더 큽니다.' : '.'}</div>` : ''}
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
   return h;
 }
@@ -1966,15 +1955,15 @@ function renderCategories() {
     return `<div class="item" style="padding-left:${depth * 20}px">
       <span class="grow"><span style="font-size:13.5px;font-weight:${depth ? 500 : 600}">
         ${esc(c.icon || '')} ${esc(c.name)}</span><br>
-        <span class="muted">${used ? `${used}건` : '아직 안 쓰임'}${c.id === 'cat_unknown' ? ' · 갈 데 없는 결제가 여기로' : ''}</span></span>
+        <span class="muted">${used ? `${used}건` : '사용 이력 없음'}${c.id === 'cat_unknown' ? ' · 분류되지 않은 결제가 여기로 집계' : ''}</span></span>
       <span class="acts">
-        <button type="button" class="act ghost small" data-editcat="${c.id}">고치기</button>
+        <button type="button" class="act ghost small" data-editcat="${c.id}">수정</button>
         ${c.id === 'cat_unknown' ? ''
           : `<button type="button" class="act danger" data-delcat="${c.id}">삭제</button>`}</span></div>`;
   };
 
-  let h = `<div class="muted" style="margin-bottom:10px">안 쓰는 칸은 지우고, 필요한 칸은 만드세요.
-    지워도 그 칸을 쓰던 결제는 사라지지 않고 위 갈래로 올라갑니다.</div>`;
+  let h = `<div class="muted" style="margin-bottom:10px">사용하지 않는 카테고리는 삭제하고 필요한 카테고리를 추가하세요.
+    삭제해도 해당 결제는 상위 카테고리로 이동합니다.</div>`;
 
   for (const kind of ['expense', 'income', 'transfer']) {
     const group = all.filter((c) => c.kind === kind);
@@ -1988,22 +1977,22 @@ function renderCategories() {
 
   h += `<form data-form="categories" style="margin-top:16px">
     <div class="hr"></div>
-    <div class="lbl" style="margin-bottom:10px">카테고리 넣기</div>
+    <div class="lbl" style="margin-bottom:10px">카테고리 등록</div>
     <input type="hidden" name="id">
     <div class="fields">
       <div class="field" style="flex:3"><label>이름</label>
         <input name="name" placeholder="반려동물" required></div>
       <div class="field" style="flex:1"><label>아이콘</label>
         <input name="icon" placeholder="🐾" maxlength="4" style="text-align:center"></div></div>
-    <div class="field"><label>어디에 들어갈까</label>
-      <select name="parentId"><option value="">큰 갈래로 (맨 위에)</option>
+    <div class="field"><label>상위 카테고리</label>
+      <select name="parentId"><option value="">상위 카테고리로 등록</option>
         ${mainCats().map((c) => `<option value="${c.id}">${esc(c.name)} 아래로</option>`).join('')}
       </select></div>
-    <div class="field"><label>무엇으로 세나</label>
+    <div class="field"><label>집계 방식</label>
       <select name="catKind">
         <option value="expense">지출</option>
         <option value="income">수입</option>
-        <option value="transfer">옮김 (카드값·저축처럼 쓴 게 아닌 것)</option></select></div>
+        <option value="transfer">이체 (카드 결제 · 저축 등 지출이 아닌 것)</option></select></div>
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
   return h;
 }
@@ -2036,14 +2025,14 @@ async function pickCategory(txnId, categoryId, box) {
       id, priority: 10, matchType: 'contains', pattern: keyword,
       categoryId, source: 'learned', hitCount: 0,
     });
-    learned = `앞으로 「${keyword}」는 자동`;
+    learned = `이후 「${keyword}」 자동 분류`;
   } else if (scope === 'exact' && normalized) {
     const id = `mch_${encodeURIComponent(normalized)}`;
     batch.set(doc(col('merchants'), id), {
       id, normalizedName: normalized, displayName: txn.merchantRaw,
       defaultCategoryId: categoryId, isPassthrough: false, alwaysAsk: false,
     });
-    learned = '앞으로 이 가게는 자동';
+    learned = '이후 이 가맹점 자동 분류';
   }
 
   // 규칙을 만들면 밀려 있던 같은 가게 건들도 함께 정리한다.
@@ -2070,14 +2059,14 @@ async function pickCategory(txnId, categoryId, box) {
   await batch.commit();
   await refresh();
   toast([`${catName(categoryId)}(으)로 저장`, learned,
-         also ? `밀려 있던 ${also}건도 정리` : '',
-         past ? `지난 ${past}건도 바꿈` : '']
+         also ? `대기 중이던 ${also}건도 분류` : '',
+         past ? `기존 ${past}건도 변경` : '']
     .filter(Boolean).join(' · '));
 }
 
 function parseScope(text, merchantRaw) {
-  if (text.startsWith('모두:')) return { scope: 'contains', keyword: text.slice(3).trim() };
-  if (text.startsWith('이 가게만')) return { scope: 'exact', keyword: normalizeMerchant(merchantRaw) };
+  if (text.startsWith('전체:')) return { scope: 'contains', keyword: text.slice(3).trim() };
+  if (text.startsWith('이 가맹점만')) return { scope: 'exact', keyword: normalizeMerchant(merchantRaw) };
   return { scope: 'once', keyword: '' };
 }
 
@@ -2105,10 +2094,10 @@ async function commitAll(ops) {
 async function deleteCategory(id) {
   const cat = D.categories.find((c) => c.id === id);
   if (!cat) return;
-  if (id === 'cat_unknown') return toast('미분류는 못 지워요 — 갈 데 없는 결제가 여기로 와요');
+  if (id === 'cat_unknown') return toast('미분류는 삭제할 수 없습니다 — 분류되지 않은 결제가 이곳으로 집계됩니다');
 
   const kids = D.categories.filter((c) => c.parentId === id && !c.hidden);
-  if (kids.length) return toast(`하위 ${kids.length}개를 먼저 옮기거나 지워 주세요`);
+  if (kids.length) return toast(`하위 ${kids.length}개를 먼저 옮기거나 삭제하세요`);
 
   const to = cat.parentId && D.categories.some((c) => c.id === cat.parentId)
     ? cat.parentId : 'cat_unknown';
@@ -2129,13 +2118,13 @@ async function deleteCategory(id) {
   const parts = [
     txns.length && `결제 ${txns.length}건`,
     rules.length && `자동 분류 규칙 ${rules.length}개`,
-    shops.length && `가게 규칙 ${shops.length}개`,
-    fixed.length && `고정비 ${fixed.length}개`,
+    shops.length && `가맹점 규칙 ${shops.length}개`,
+    fixed.length && `고정지출 ${fixed.length}개`,
   ].filter(Boolean);
 
   const msg = parts.length
-    ? `「${cat.name}」 을(를) 쓰던 ${parts.join(', ')}가 「${catName(to)}」(으)로 옮겨집니다.\n\n지울까요?`
-    : `「${cat.name}」 을(를) 지울까요?`;
+    ? `「${cat.name}」 을(를) 사용하던 ${parts.join(', ')}가 「${catName(to)}」(으)로 이동합니다.\n\n삭제할까요?`
+    : `「${cat.name}」 을(를) 삭제할까요?`;
   if (!confirm(msg)) return;
 
   await commitAll([
@@ -2146,12 +2135,12 @@ async function deleteCategory(id) {
       { removedCategories: [...(D.settings.removedCategories || []), id] }, { merge: true }),
   ]);
   await refresh();
-  toast(moves.length ? `지웠어요 — ${parts.join(', ')}는 ${catName(to)}(으)로` : '지웠어요');
+  toast(moves.length ? `삭제했습니다 — ${parts.join(', ')}는 ${catName(to)}(으)로 이동` : '삭제했습니다');
 }
 
 async function saveDoc(kind, values) {
   const name = values.name?.trim();
-  if (kind !== 'settings' && !name) return toast('이름을 적어 주세요');
+  if (kind !== 'settings' && !name) return toast('이름을 입력하세요');
 
   if (kind === 'settings') {
     await setDoc(doc(db, 'users', uid, 'meta', 'settings'), {
@@ -2212,10 +2201,10 @@ async function saveDoc(kind, values) {
     const me = D.categories.find((c) => c.id === values.id);
     const parent = D.categories.find((c) => c.id === parentId);
     // 두 단계까지만. 세 단계가 되면 고르는 품이 분류해서 얻는 것보다 커진다.
-    if (parent?.parentId) return toast('하위의 하위는 만들 수 없어요');
-    if (me && parentId === me.id) return toast('자기 자신 아래로는 못 넣어요');
+    if (parent?.parentId) return toast('하위의 하위는 만들 수 없습니다');
+    if (me && parentId === me.id) return toast('자기 자신 아래로는 넣을 수 없습니다');
     if (me && parentId && D.categories.some((c) => c.parentId === me.id && !c.hidden)) {
-      return toast('하위가 있는 갈래는 다른 갈래 밑으로 옮길 수 없어요');
+      return toast('하위가 있는 카테고리는 다른 카테고리 밑으로 옮길 수 없습니다');
     }
     const ref = me ? doc(col('categories'), me.id)
                    : doc(col('categories'), `cat_u_${Date.now().toString(36)}`);
@@ -2247,7 +2236,7 @@ async function saveDoc(kind, values) {
   }
 
   await refresh();
-  toast('저장했어요');
+  toast('저장했습니다');
 }
 
 /**
@@ -2269,12 +2258,12 @@ function exportCsv() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast(`${D.txns.length}건을 내보냈어요`);
+  toast(`${D.txns.length}건을 내보냈습니다`);
 }
 
 async function pingIngest() {
-  if (!ingestUrl()) return toast('주소를 먼저 저장해 주세요');
-  toast('두드려 보는 중…');
+  if (!ingestUrl()) return toast('주소를 먼저 저장하세요');
+  toast('확인 중…');
   try {
     const res = await fetch(ingestUrl(), {
       method: 'POST',
@@ -2283,14 +2272,14 @@ async function pingIngest() {
     });
     const data = await res.json().catch(() => ({}));
 
-    if (data.reason === 'unauthorized') return toast('✅ 주소가 살아 있어요');
-    if (data.reason === 'no-token') return toast('주소는 살아 있어요 — 아래에서 토큰을 먼저 저장하세요');
-    if (data.reason === 'not-set-up') return toast('주소는 살아 있는데 주인이 안 잡혔어요');
-    if (res.status === 403) return toast('❌ 함수가 비공개예요 — 알려 주세요');
-    if (res.status === 404) return toast('❌ 주소를 찾지 못했어요 — 함수가 배포됐는지 확인하세요');
+    if (data.reason === 'unauthorized') return toast('✅ 주소가 정상입니다');
+    if (data.reason === 'no-token') return toast('주소는 정상 — 아래에서 비밀번호를 먼저 저장하세요');
+    if (data.reason === 'not-set-up') return toast('주소는 정상 — 사용자가 연결되지 않았습니다');
+    if (res.status === 403) return toast('❌ 함수가 비공개 상태입니다');
+    if (res.status === 404) return toast('❌ 주소를 찾지 못했습니다 — 배포 상태를 확인하세요');
     return toast(`응답: ${res.status} ${data.reason || ''}`);
   } catch (err) {
-    toast(`❌ 닿지 않아요 — ${err.message}`);
+    toast(`❌ 연결 실패 — ${err.message}`);
   }
 }
 
@@ -2306,7 +2295,7 @@ function guard(handler) {
       await handler(e);
     } catch (err) {
       const msg = String(err?.code || err?.message || err);
-      if (msg.includes('permission-denied')) toast('권한이 없어요 — 보안 규칙을 확인해 주세요');
+      if (msg.includes('permission-denied')) toast('권한이 없습니다 — 보안 규칙을 확인하세요');
       else toast(`실패: ${msg}`);
       console.error(err);
     }
@@ -2369,7 +2358,7 @@ document.addEventListener('click', guard(async (e) => {
   if (ignore) {
     await updateDoc(doc(col('raw'), ignore.dataset.ignore), { parsedOk: true, parseNote: '거래 아님' });
     await refresh();
-    return toast('치웠어요');
+    return toast('처리했습니다');
   }
 
   const syncBal = e.target.closest('[data-syncbal]');
@@ -2380,7 +2369,7 @@ document.addEventListener('click', guard(async (e) => {
       balanceAt: new Date().toISOString(),
     });
     await refresh();
-    return toast('문자에 찍힌 값으로 맞췄어요');
+    return toast('문자 기준으로 갱신했습니다');
   }
 
   const addFixed = e.target.closest('[data-addfixed]');
@@ -2398,7 +2387,7 @@ document.addEventListener('click', guard(async (e) => {
       source: 'detected',
     });
     await refresh();
-    return toast(`${f.name} 을(를) 고정비로 넣었어요`);
+    return toast(`${f.name} 을(를) 고정지출로 등록했습니다`);
   }
 
   const noFixed = e.target.closest('[data-nofixed]');
@@ -2407,7 +2396,7 @@ document.addEventListener('click', guard(async (e) => {
       ignoredRecurring: [...(D.settings.ignoredRecurring || []), noFixed.dataset.nofixed],
     }, { merge: true });
     await refresh();
-    return toast('다시 안 물어볼게요');
+    return toast('다시 묻지 않습니다');
   }
 
   const offset = e.target.closest('[data-offset]');
@@ -2421,7 +2410,7 @@ document.addEventListener('click', guard(async (e) => {
       (b) => b.update(doc(col('txns'), c.id), settledPatch(o)),
     ]);
     await refresh();
-    return toast(`${o.merchantRaw || '그 결제'} 를 없던 일로 했어요`);
+    return toast(`${o.merchantRaw || '해당 결제'} 를 취소 처리했습니다`);
   }
 
   const dropCancel = e.target.closest('[data-dropcancel]');
@@ -2429,7 +2418,7 @@ document.addEventListener('click', guard(async (e) => {
     await updateDoc(doc(col('txns'), dropCancel.dataset.dropcancel),
       { status: 'settled', offsetsId: 'none' });
     await refresh();
-    return toast('치웠어요 — 통계엔 안 들어갑니다');
+    return toast('처리했습니다 — 통계에서 제외됩니다');
   }
 
   const delcat = e.target.closest('[data-delcat]');
@@ -2446,7 +2435,7 @@ document.addEventListener('click', guard(async (e) => {
     form.elements.parentId.value = c.parentId || '';
     form.elements.catKind.value = c.kind || 'expense';
     form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    return toast(`${c.name} 을(를) 불러왔어요 — 고치고 저장하세요`);
+    return toast(`${c.name} 을(를) 불러왔습니다 — 수정 후 저장하세요`);
   }
 
   const edit = e.target.closest('[data-edit]');
@@ -2481,18 +2470,18 @@ document.addEventListener('click', guard(async (e) => {
       const box = form.closest('.fold');
       if (box && !box.open) box.open = true;
       form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      toast(`${row.name} 을(를) 불러왔어요 — 고치고 저장하세요`);
+      toast(`${row.name} 을(를) 불러왔습니다 — 수정 후 저장하세요`);
     }
     return;
   }
 
   const del = e.target.closest('[data-del]');
-  if (del && confirm('지울까요?')) {
+  if (del && confirm('삭제할까요?')) {
     const [name, id] = del.dataset.del.split(':');
     await deleteDoc(doc(col(name), id));
     if (name === 'txns') editTxn = null;
     await refresh();
-    return toast('지웠어요');
+    return toast('삭제했습니다');
   }
 
   if (e.target.id === 'pingIngest') return pingIngest();
@@ -2508,7 +2497,7 @@ document.addEventListener('click', guard(async (e) => {
     return syncQuick();
   }
 
-  if (e.target.id === 'refresh') { await refresh(); return toast('새로 불러왔어요'); }
+  if (e.target.id === 'refresh') { await refresh(); return toast('새로 불러왔습니다'); }
   if (e.target.id === 'signout') return signOut(auth);
 }));
 
@@ -2552,7 +2541,7 @@ document.addEventListener('change', guard(async (e) => {
   const field = kind === 'merchants' ? 'defaultCategoryId' : 'categoryId';
   await updateDoc(doc(col(kind), id), { [field]: sel.value || null });
   await refresh();
-  toast('바꿨어요');
+  toast('변경했습니다');
 }));
 
 /**
@@ -2582,7 +2571,7 @@ document.addEventListener('submit', guard(async (e) => {
 
   if (form.dataset.raw) {
     const amount = parseAmount(values.amount);
-    if (!amount) return toast('금액을 넣어 주세요');
+    if (!amount) return toast('금액을 입력하세요');
     const raw = D.raw.find((r) => r.id === form.dataset.raw);
     const ref = doc(col('txns'));
     const batch = writeBatch(db);
@@ -2594,15 +2583,15 @@ document.addEventListener('submit', guard(async (e) => {
       source: 'manual', rawMessageId: form.dataset.raw, excludeFromBudget: false,
     });
     batch.update(doc(col('raw'), form.dataset.raw),
-      { txnId: ref.id, parsedOk: true, parseNote: '손으로 넣음' });
+      { txnId: ref.id, parsedOk: true, parseNote: '직접 입력' });
     await batch.commit();
     await refresh();
-    return toast('넣었어요');
+    return toast('등록했습니다');
   }
 
   if (form.dataset.form === 'quick') {
     const amount = Math.abs(parseAmount(values.amount) || 0);
-    if (!amount) return toast('금액을 넣어 주세요');
+    if (!amount) return toast('금액을 입력하세요');
 
     const kind = values.type || 'expense';
     const when = values.date
@@ -2623,12 +2612,12 @@ document.addEventListener('submit', guard(async (e) => {
     });
     closeQuick();
     await refresh();
-    return toast(`${{ expense: '쓴 돈', income: '받은 돈', transfer: '옮긴 돈' }[kind]} ${won(amount)} 넣었어요`);
+    return toast(`${{ expense: '지출', income: '수입', transfer: '이체' }[kind]} ${won(amount)} 등록했습니다`);
   }
 
   if (form.dataset.txn) {
     const amount = parseAmount(values.amount);
-    if (!amount) return toast('금액을 넣어 주세요');
+    if (!amount) return toast('금액을 입력하세요');
     await updateDoc(doc(col('txns'), form.dataset.txn), {
       amount,
       merchantRaw: String(values.merchantRaw || '').trim(),
@@ -2637,16 +2626,16 @@ document.addEventListener('submit', guard(async (e) => {
       excludeFromBudget: values.excludeFromBudget === true,
     });
     await refresh();
-    return toast('고쳤어요');
+    return toast('수정했습니다');
   }
 
   if (form.dataset.form === 'paste') {
     const body = String(values.body || '').trim();
-    if (!body) return toast('문자를 붙여 넣어 주세요');
+    if (!body) return toast('문자를 붙여 넣으세요');
     const token = String(D.ingest?.token || '').trim();
-    if (!token) return toast('설정에서 문자 연결 비밀번호를 먼저 정해 주세요');
+    if (!token) return toast('설정에서 문자 연결 비밀번호를 먼저 등록하세요');
 
-    toast('넣는 중…');
+    toast('등록 중…');
     const res = await fetch(ingestUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2658,14 +2647,14 @@ document.addEventListener('submit', guard(async (e) => {
 
     if (out.status === 'batch') {
       return toast([`${out.count}통 중`,
-        out.saved ? `${out.saved}건 넣음` : '',
-        out.duplicate ? `${out.duplicate}건은 이미 있음` : '',
-        out.failed ? `${out.failed}건은 못 읽음` : ''].filter(Boolean).join(' · '));
+        out.saved ? `${out.saved}건 등록` : '',
+        out.duplicate ? `${out.duplicate}건 중복` : '',
+        out.failed ? `${out.failed}건 인식 실패` : ''].filter(Boolean).join(' · '));
     }
-    if (out.status === 'duplicate') return toast('이미 들어와 있는 문자예요');
-    if (out.status === 'parse_failed') return toast(`못 읽었어요 — ${out.note || ''}`);
-    if (out.status === 'ok') return toast(`${out.merchant} ${won(out.amount)} 넣었어요`);
-    return toast(out.message || '넣지 못했어요');
+    if (out.status === 'duplicate') return toast('이미 등록된 문자입니다');
+    if (out.status === 'parse_failed') return toast(`인식하지 못했습니다 — ${out.note || ''}`);
+    if (out.status === 'ok') return toast(`${out.merchant} ${won(out.amount)} 등록했습니다`);
+    return toast(out.message || '등록하지 못했습니다');
   }
 
   if (form.dataset.form === 'shifts') {
@@ -2678,8 +2667,8 @@ document.addEventListener('submit', guard(async (e) => {
       { days: { ...kept, ...parsed } });
     await refresh();
     return toast(Object.keys(parsed).length
-      ? `${Number(month.split('-')[1])}월 ${Object.keys(parsed).length}일치를 넣었어요`
-      : '비웠어요');
+      ? `${Number(month.split('-')[1])}월 ${Object.keys(parsed).length}일치를 등록했습니다`
+      : '비웠습니다');
   }
 
   if (form.dataset.form === 'catbudget') {
@@ -2690,7 +2679,7 @@ document.addEventListener('submit', guard(async (e) => {
     }
     await setDoc(doc(db, 'users', uid, 'meta', 'settings'), { categoryBudgets: limits }, { merge: true });
     await refresh();
-    return toast(Object.keys(limits).length ? `${Object.keys(limits).length}개 갈래에 예산을 잡았어요` : '예산을 다 지웠어요');
+    return toast(Object.keys(limits).length ? `${Object.keys(limits).length}개 카테고리에 예산을 설정했습니다` : '예산을 모두 삭제했습니다');
   }
 
   if (form.dataset.form === 'goal') {
@@ -2699,41 +2688,41 @@ document.addEventListener('submit', guard(async (e) => {
     await setDoc(doc(db, 'users', uid, 'meta', 'settings'), {
       goal: {
         kind,
-        name: String(values.name || '').trim() || (kind === 'payoff' ? '빚 정리' : '모으기'),
+        name: String(values.name || '').trim() || (kind === 'payoff' ? '부채 상환' : '저축'),
         startAmount: parseAmount(values.startAmount) || 0,
         targetAmount: kind === 'save' ? (parseAmount(values.targetAmount) || 0) : 0,
         targetDate: values.targetDate || '',
       },
     }, { merge: true });
     await refresh();
-    return toast('저장했어요');
+    return toast('저장했습니다');
   }
 
   if (form.dataset.form === 'ingestUrl') {
     const url = values.url.trim();
-    if (url && !/^https:\/\//.test(url)) return toast('https:// 로 시작해야 해요');
+    if (url && !/^https:\/\//.test(url)) return toast('https:// 로 시작해야 합니다');
     await setDoc(doc(db, 'config/ingest'), { url }, { merge: true });
     await refresh();
-    return toast('저장했어요');
+    return toast('저장했습니다');
   }
 
   if (form.dataset.form === 'widgetToken') {
     const token = values.widgetToken.trim();
-    if (token.length < 8) return toast('8자 이상으로 해 주세요');
-    if (/[\s&?#%+/]/.test(token)) return toast('공백과 & ? # % + / 는 쓸 수 없어요');
+    if (token.length < 8) return toast('8자 이상 입력하세요');
+    if (/[\s&?#%+/]/.test(token)) return toast('공백과 & ? # % + / 는 사용할 수 없습니다');
     await setDoc(doc(db, 'config/ingest'), { widgetToken: token }, { merge: true });
     form.reset();
     await refresh();
-    return toast('저장했어요 — 위젯 스크립트의 TOKEN 도 고쳐 주세요');
+    return toast('저장했습니다 — 위젯 스크립트의 TOKEN 도 수정하세요');
   }
 
   if (form.dataset.form === 'token') {
     const token = values.token.trim();
-    if (token.length < 8) return toast('8자 이상으로 해 주세요');
-    if (/[\s&?#%+/]/.test(token)) return toast('공백과 & ? # % + / 는 쓸 수 없어요');
+    if (token.length < 8) return toast('8자 이상 입력하세요');
+    if (/[\s&?#%+/]/.test(token)) return toast('공백과 & ? # % + / 는 사용할 수 없습니다');
     await setDoc(doc(db, 'config/ingest'), { token }, { merge: true });
     form.reset();
-    return toast('저장했어요 — 단축어의 token 도 고쳐 주세요');
+    return toast('저장했습니다 — 단축어의 token 도 수정하세요');
   }
 
   if (form.dataset.form) {

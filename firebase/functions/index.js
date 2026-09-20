@@ -24,14 +24,14 @@ const db = getFirestore();
 async function ownerUid() {
   const snap = await db.doc('config/owner').get();
   const uid = snap.exists ? snap.data().uid : null;
-  if (!uid) throw new HttpError(503, 'not-set-up', '앱에 한 번 로그인해 주세요');
+  if (!uid) throw new HttpError(503, 'not-set-up', '앱에 한 번 로그인하세요');
   return uid;
 }
 
 async function ingestToken() {
   const snap = await db.doc('config/ingest').get();
   const token = snap.exists ? String(snap.data().token || '').trim() : '';
-  if (!token) throw new HttpError(503, 'no-token', '앱 설정에서 수집 토큰을 정해 주세요');
+  if (!token) throw new HttpError(503, 'no-token', '앱 설정에서 문자 연결 비밀번호를 등록하세요');
   return token;
 }
 
@@ -65,12 +65,12 @@ export const ingest = onRequest(
   },
   async (req, res) => {
     try {
-      if (req.method !== 'POST') throw new HttpError(405, 'method', 'POST 로 보내 주세요');
+      if (req.method !== 'POST') throw new HttpError(405, 'method', 'POST 로 요청하세요');
 
       const payload = req.body || {};
       const token = await ingestToken();
       if (String(payload.token || '').trim() !== token) {
-        throw new HttpError(401, 'unauthorized', '토큰이 맞지 않아요');
+        throw new HttpError(401, 'unauthorized', '비밀번호가 맞지 않습니다');
       }
 
       const whole = String(payload.body || '').trim();
@@ -271,7 +271,7 @@ function anchorsFrom(parsed) {
 async function widgetToken() {
   const snap = await db.doc('config/ingest').get();
   const token = snap.exists ? String(snap.data().widgetToken || '').trim() : '';
-  if (!token) throw new HttpError(503, 'no-widget-token', '앱 설정에서 위젯 비밀번호를 정해 주세요');
+  if (!token) throw new HttpError(503, 'no-widget-token', '앱 설정에서 위젯 비밀번호를 등록하세요');
   return token;
 }
 
@@ -281,9 +281,9 @@ export const summary = onRequest(
     res.set('Cache-Control', 'no-store');
     try {
       const given = String(req.query?.token || req.body?.token || '').trim();
-      if (!given) throw new HttpError(401, 'no-token', '토큰이 없습니다');
+      if (!given) throw new HttpError(401, 'no-token', '비밀번호가 없습니다');
       if (given !== (await widgetToken())) {
-        throw new HttpError(401, 'unauthorized', '토큰이 맞지 않습니다');
+        throw new HttpError(401, 'unauthorized', '비밀번호가 맞지 않습니다');
       }
 
       const uid = await ownerUid();

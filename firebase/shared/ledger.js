@@ -11,7 +11,7 @@
  * 구독은 등록해 둔 항목이기도 하고 카드 승인 문자로도 들어오기 때문이다.
  */
 import { normalizeMerchant } from './parse.js';
-import { hitsRecurring } from './fixed.js';
+import { hitsRecurring, liveRecurring } from './fixed.js';
 import { netAmount } from './settlement.js';
 import { rollup } from './accounts.js';
 import { prevBusinessDay } from './holidays.js';
@@ -33,7 +33,8 @@ import { prevBusinessDay } from './holidays.js';
  * 세면 그달만 갑자기 여력이 없어 보이고 나머지 열한 달은 있는 줄 안다.
  */
 export function monthlyFixed(recurring = []) {
-  return recurring.reduce((sum, r) => {
+  // 해지한 것은 더 안 나간다. 여력에서 빼야 맞는다.
+  return liveRecurring(recurring).reduce((sum, r) => {
     const amount = Number(r.expectedAmount || 0);
     return sum + (r.period === 'yearly' ? amount / 12 : amount);
   }, 0);
@@ -42,7 +43,8 @@ export function monthlyFixed(recurring = []) {
 /** 이 달에 실제로 빠져나갈 고정비. 연 1회짜리는 그달에만. */
 export function fixedDueIn(recurring = [], yyyymm) {
   const month = Number(String(yyyymm).split('-')[1]);
-  return recurring.filter((r) => r.period !== 'yearly' || Number(r.monthOfYear) === month);
+  return liveRecurring(recurring)
+    .filter((r) => r.period !== 'yearly' || Number(r.monthOfYear) === month);
 }
 
 export function monthWindow(yyyymm, cycleStartDay = 1, opts = {}) {

@@ -25,7 +25,10 @@ import { toCSV } from './shared/csv.js';
 import { detectRecurring } from './shared/detect.js';
 import { parseShiftText, shiftText, shiftStats, SHIFT_LABEL } from './shared/shifts.js';
 import { cardCheck, balanceCheck } from './shared/anchors.js';
-import { fixedStatus, lateFixed, parseKeywords } from './shared/fixed.js';
+// candidates 는 취소 상계에서 쓰는 지역 변수와 이름이 겹친다. 갈아 두면
+// 한쪽을 고칠 때 다른 쪽이 조용히 가려지는 일이 없다.
+import { fixedStatus, lateFixed, parseKeywords, candidates as fixedCandidates }
+  from './shared/fixed.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
 import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
@@ -43,6 +46,7 @@ const openMain = new Map();
 
 /** 내역에서 보고 있는 달 · 펼쳐 둔 갈래 · 고치는 중인 거래 · 찾는 말. */
 let histQuery = '';
+let fixPick = null;      // '출금됐습니다' 를 누른 고정지출
 let histMonth = null;
 let histOpen = null;
 let editTxn = null;
@@ -1394,16 +1398,20 @@ function renderFixed() {
   } else {
     for (const r of list) {
       const st = status.get(r.id);
-      h += `<div class="item">
+      const dead = r.active === false;
+      h += `<div class="item"${dead ? ' style="opacity:.55"' : ''}>
         <span class="muted num" style="width:34px">${r.period === 'yearly'
           ? `${r.monthOfYear || 1}월` : (r.dayOfMonth ? r.dayOfMonth + '일' : '—')}</span>
-        <span class="grow"><span style="font-size:13.5px;font-weight:500">${esc(r.name)}</span>
+        <span class="grow"><span style="font-size:13.5px;font-weight:500${
+          dead ? ';text-decoration:line-through' : ''}">${esc(r.name)}</span>
           ${fixedNote(r, st)}</span>
         <span class="num" style="font-size:13.5px;font-weight:600">${
           r.amountVaries ? '약 ' : ''}${won(r.expectedAmount)}</span>
-        <span class="acts">
-          <button type="button" class="act ghost small" data-edit="recurring:${r.id}">수정</button>
+        <span class="acts">${dead
+          ? `<button type="button" class="act ghost small" data-fixback="${r.id}">되살리기</button>`
+          : `<button type="button" class="act ghost small" data-edit="recurring:${r.id}">수정</button>`}
           <button type="button" class="act danger" data-del="recurring:${r.id}">삭제</button></span></div>`;
+      if (st) h += fixedAsk(r, st);
     }
   }
   h += '</div>';
@@ -1446,6 +1454,9 @@ function renderFixed() {
     <button type="submit" class="act primary" style="width:100%">등록</button></form>`;
 
   $('fixed').innerHTML = h;
+  // 이 함수는 새로고침 말고 고르기 칸을 여닫을 때도 불린다. 폼을 다시 그렸으니
+  // 주기에 따라 숨길 칸도 다시 숨긴다.
+  syncRecurringForm();
 }
 
 /** 등록한 고정지출이 이번 달에 어디까지 왔는지. */
@@ -1457,6 +1468,53 @@ function fixedState(month) {
 }
 
 const DATE_SHORT = (d) => `${d.getMonth() + 1}월 ${d.getDate()}일`;
+
+/**
+ * 안 들어온 고정지출에 묻는 말.
+ *
+ * 알림에는 끝이 있어야 한다. 물어보기만 하고 치울 길이 없으면 알림은 영영
+ * 남고, 남아 있는 알림은 곧 안 보는 알림이 된다. 답은 셋이고 어느 것을 골라도
+ * 알림이 사라진다.
+ *
+ *   해지했습니다   더는 안 나가는 돈이다. 여력 계산에서도 빠진다
+ *   출금됐습니다   문자는 놓쳤지만 돈은 나갔다 — 어느 건인지 고른다
+ *   이번 달 넘기기 이번 달만 아니다. 다음 달엔 다시 지켜본다
+ */
+function fixedAsk(r, st) {
+  if (st.state === 'skipped') {
+    return `<div class="note" style="margin:2px 0 10px">
+      이번 달은 넘기기로 했습니다.
+      <button type="button" class="act ghost small" style="margin-left:8px"
+        data-fixunskip="${r.id}">되돌리기</button></div>`;
+  }
+  if (st.state !== 'late') return '';
+
+  const picking = fixPick === r.id;
+  let h = `<div class="note warn" style="margin:2px 0 10px">
+    <b>${DATE_SHORT(st.settled)}에 빠졌어야 합니다.</b> ${st.daysLate}일째 문자가 오지 않았습니다.
+    <div class="acts" style="margin-top:9px;justify-content:flex-start;flex-wrap:wrap">
+      <button type="button" class="act ${picking ? 'ghost' : 'primary'} small"
+        data-fixpick="${r.id}">${picking ? '닫기' : '출금됐습니다'}</button>
+      <button type="button" class="act ghost small" data-fixend="${r.id}">해지했습니다</button>
+      <button type="button" class="act ghost small" data-fixskip="${r.id}">이번 달 넘기기</button>
+    </div>`;
+
+  if (picking) {
+    const rows = fixedCandidates(r, D.txns, monthKey(), 6);
+    h += `<div class="hr"></div><div class="muted" style="margin-bottom:7px">어느 결제입니까?</div>`;
+    h += rows.length
+      ? rows.map((t) => `<button type="button" class="pickrow" data-fixlink="${r.id}:${t.id}">
+          <span class="grow"><span style="font-size:13px;font-weight:600">${
+            esc(t.merchantRaw || '(가맹점 미상)')}</span><br>
+            <span class="muted">${esc(String(t.occurredAt).slice(5, 10))}${
+              t.cardName ? ' · ' + esc(t.cardName) : ''}</span></span>
+          <span class="num" style="font-size:13px;font-weight:600">${won(t.amount)}</span></button>`).join('')
+      : `<div class="muted">이 시기에 등록된 지출이 없습니다.</div>`;
+    h += `<div class="muted" style="margin-top:9px">목록에 없으면 문자를 먼저 등록하세요 —
+      확인 탭의 <b>문자 붙여넣기</b>, 또는 <b>+</b> 로 직접 입력.</div>`;
+  }
+  return h + '</div>';
+}
 
 /** 고정지출 한 줄 아래에 붙는 설명. 상태가 곧 설명이다. */
 function fixedNote(r, st) {
@@ -1470,6 +1528,11 @@ function fixedNote(r, st) {
     return `<br><span class="muted">${bits.join(' · ')}</span>`;
   }
 
+  if (st.state === 'ended') {
+    bits.push('<b>해지함</b> — 지켜보지 않습니다');
+    return `<br><span class="muted">${bits.join(' · ')}</span>`;
+  }
+
   if (st.state === 'paid') {
     const at = new Date(st.txn.occurredAt);
     bits.push(`<b style="color:var(--ink2)">${DATE_SHORT(at)} 출금 확인</b>`);
@@ -1479,6 +1542,8 @@ function fixedNote(r, st) {
     }
   } else if (st.state === 'late') {
     bits.push(`<b style="color:var(--warn-mark)">${DATE_SHORT(st.settled)} 예정 · 미확인</b>`);
+  } else if (st.state === 'skipped') {
+    bits.push(`${DATE_SHORT(st.settled)} 예정 · 이번 달 넘김`);
   } else if (st.state === 'waiting') {
     bits.push(`${DATE_SHORT(st.settled)} 예정${st.shifted ? ' — 휴일이라 이월' : ''}`);
   }
@@ -2372,6 +2437,78 @@ document.addEventListener('click', guard(async (e) => {
     return toast('문자 기준으로 갱신했습니다');
   }
 
+  // 안 들어온 고정지출에 답하기 — 어느 답이든 알림이 사라진다
+  const fixPickBtn = e.target.closest('[data-fixpick]');
+  if (fixPickBtn) {
+    const id = fixPickBtn.dataset.fixpick;
+    fixPick = fixPick === id ? null : id;
+    return renderFixed();
+  }
+
+  const fixLink = e.target.closest('[data-fixlink]');
+  if (fixLink) {
+    const [rid, tid] = fixLink.dataset.fixlink.split(':');
+    const r = D.recurring.find((x) => x.id === rid);
+    const t = D.txns.find((x) => x.id === tid);
+    if (!r || !t) return;
+
+    // 이름이 안 맞아서 못 찾은 것이라면 이번 한 번으로 끝낼 일이 아니다.
+    // 다음 달에도 같은 이름으로 올 테니 키워드로 배워 둔다.
+    const words = parseKeywords(r.keywords);
+    const learn = normalizeMerchant(t.merchantRaw);
+    const known = learn && (normalizeMerchant(r.name) && learn.includes(normalizeMerchant(r.name))
+      || words.some((w) => learn.includes(normalizeMerchant(w))));
+    const next = !known && learn ? [...words, t.merchantRaw.trim()] : words;
+
+    const batch = writeBatch(db);
+    batch.update(doc(col('txns'), tid), { recurringId: rid });
+    if (next !== words) batch.update(doc(col('recurring'), rid), { keywords: next });
+    await batch.commit();
+
+    fixPick = null;
+    await refresh();
+    return toast(next !== words
+      ? `${r.name} 에 이었습니다 — 「${t.merchantRaw}」를 찾을 단어로 등록했습니다`
+      : `${r.name} 에 이었습니다`);
+  }
+
+  const fixEnd = e.target.closest('[data-fixend]');
+  if (fixEnd) {
+    const r = D.recurring.find((x) => x.id === fixEnd.dataset.fixend);
+    if (!r || !confirm(`${r.name} 을(를) 해지한 것으로 둘까요?\n\n더는 지켜보지 않고 월 고정지출에서도 빠집니다.\n지난 내역은 그대로 남습니다.`)) return;
+    await updateDoc(doc(col('recurring'), r.id), { active: false, endedAt: new Date().toISOString() });
+    await refresh();
+    return toast(`${r.name} 을(를) 해지 처리했습니다`);
+  }
+
+  const fixBack = e.target.closest('[data-fixback]');
+  if (fixBack) {
+    await updateDoc(doc(col('recurring'), fixBack.dataset.fixback), { active: true, endedAt: null });
+    await refresh();
+    return toast('다시 지켜봅니다');
+  }
+
+  const fixSkip = e.target.closest('[data-fixskip]');
+  if (fixSkip) {
+    const r = D.recurring.find((x) => x.id === fixSkip.dataset.fixskip);
+    if (!r) return;
+    const months = [...new Set([...(r.skipMonths || []), monthKey()])];
+    await updateDoc(doc(col('recurring'), r.id), { skipMonths: months });
+    fixPick = null;
+    await refresh();
+    return toast('이번 달은 넘깁니다 — 다음 달에 다시 확인합니다');
+  }
+
+  const fixUnskip = e.target.closest('[data-fixunskip]');
+  if (fixUnskip) {
+    const r = D.recurring.find((x) => x.id === fixUnskip.dataset.fixunskip);
+    if (!r) return;
+    await updateDoc(doc(col('recurring'), r.id),
+      { skipMonths: (r.skipMonths || []).filter((m) => m !== monthKey()) });
+    await refresh();
+    return toast('다시 지켜봅니다');
+  }
+
   const addFixed = e.target.closest('[data-addfixed]');
   if (addFixed) {
     const f = detectRecurring({ transactions: D.txns, recurring: D.recurring, settings: D.settings })
@@ -2383,7 +2520,8 @@ document.addEventListener('click', guard(async (e) => {
       expectedAmount: f.expectedAmount,
       dayOfMonth: f.dayOfMonth,
       categoryId: f.categoryId || null,
-      varies: f.varies,
+      amountVaries: Boolean(f.varies),
+      active: true,
       source: 'detected',
     });
     await refresh();

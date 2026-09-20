@@ -228,3 +228,9 @@ table{width:100%;border-collapse:collapse;font-size:12px}
 th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line2);
   vertical-align:top;word-break:break-all}
 th{font-weight:600;color:var(--ink2);white-space:nowrap}
+
+/* 놓친 고정지출에 "이 결제건이다"라고 답할 때 고르는 줄 */
+.pickrow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  font:inherit;color:var(--ink);cursor:pointer;padding:10px 0;background:none;
+  border:0;border-bottom:1px solid var(--warn-line)}
+.pickrow:last-of-type{border-bottom:0}

@@ -59,8 +59,10 @@ export function detectRecurring(data = {}, now = new Date()) {
   const { transactions = [], recurring = [], settings = {} } = data;
   const ignored = new Set(settings.ignoredRecurring || []);
 
-  // 이미 등록해 둔 것은 다시 권하지 않는다
+  // 이미 등록해 둔 것은 다시 권하지 않는다. 해지한 것은 뺀다 —
+  // 해지했는데도 계속 빠져나가고 있으면 그건 다시 알려 줘야 한다.
   const known = recurring
+    .filter((r) => r.active !== false)
     .map((r) => normalizeMerchant(r.name))
     .filter(Boolean);
 

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseKeywords, hitsRecurring, dueDateOf, fixedStatus, lateFixed } from './fixed.js';
+import { parseKeywords, hitsRecurring, dueDateOf, fixedStatus, lateFixed,
+         candidates, liveRecurring } from './fixed.js';
 
 const netflix = {
   id: 'r1', name: '넷플릭스', expectedAmount: 17_000, dayOfMonth: 15, period: 'monthly',
@@ -144,4 +145,75 @@ test('안 들어온 것만 골라 늦은 순으로 준다', () => {
   };
   const rows = lateFixed(fixedStatus(data, '2026-09', new Date('2026-09-20T09:00:00')));
   assert.deepEqual(rows.map((r) => r.id), ['a', 'b']);
+});
+
+test('해지하면 더는 지켜보지 않는다', () => {
+  const ended = { ...netflix, active: false };
+  const rows = fixedStatus({ recurring: [ended], transactions: [] }, '2026-09', new Date('2026-09-20T09:00:00'));
+  assert.equal(rows[0].state, 'ended');
+  assert.deepEqual(lateFixed(rows), []);
+});
+
+test('이번 달만 넘기면 알림이 사라지고 다음 달엔 다시 지켜본다', () => {
+  const r = { ...netflix, skipMonths: ['2026-09'] };
+  const data = { recurring: [r], transactions: [] };
+  assert.equal(fixedStatus(data, '2026-09', new Date('2026-09-20T09:00:00'))[0].state, 'skipped');
+  assert.equal(fixedStatus(data, '2026-10', new Date('2026-10-20T09:00:00'))[0].state, 'late');
+});
+
+test('손으로 이어 붙인 거래는 이름이 안 맞아도 받아들인다', () => {
+  const data = {
+    recurring: [netflix],
+    transactions: [{
+      id: 't1', type: 'expense', amount: 17_000, recurringId: 'r1',
+      occurredAt: '2026-09-15T04:10:00', merchantRaw: 'NF KOREA 0915',
+    }],
+  };
+  const row = fixedStatus(data, '2026-09', new Date('2026-09-20T09:00:00'))[0];
+  assert.equal(row.state, 'paid');
+  assert.equal(row.txn.id, 't1');
+});
+
+test('이어 붙인 거래는 기한을 넘겨 들어왔어도 받아들인다', () => {
+  // 16일이 기한인데 22일에 찍혔다. 사람이 보고 고른 것이라 자동 판정보다 세다.
+  const data = {
+    recurring: [netflix],
+    transactions: [{
+      id: 't1', type: 'expense', amount: 17_000, recurringId: 'r1',
+      occurredAt: '2026-09-22T04:10:00', merchantRaw: '어딘가',
+    }],
+  };
+  assert.equal(fixedStatus(data, '2026-09', new Date('2026-09-25T09:00:00'))[0].state, 'paid');
+});
+
+test('다른 고정지출에 이어 붙인 거래는 이쪽 것이 아니다', () => {
+  const txn = { id: 't1', type: 'expense', amount: 17_000, recurringId: 'r9', merchantRaw: '넷플릭스' };
+  assert.equal(hitsRecurring(txn, netflix), false);
+});
+
+test('"출금됐다"고 할 때 고를 거래는 금액과 날짜가 가까운 순이다', () => {
+  const txns = [
+    { id: 'far', type: 'expense', amount: 17_000, occurredAt: '2026-09-25T10:00:00', merchantRaw: '가' },
+    { id: 'near', type: 'expense', amount: 17_000, occurredAt: '2026-09-15T10:00:00', merchantRaw: '나' },
+    { id: 'off', type: 'expense', amount: 90_000, occurredAt: '2026-09-15T11:00:00', merchantRaw: '다' },
+    { id: 'out', type: 'expense', amount: 17_000, occurredAt: '2026-08-01T10:00:00', merchantRaw: '라' },
+    { id: 'mine', type: 'expense', amount: 17_000, occurredAt: '2026-09-16T10:00:00', recurringId: 'r9', merchantRaw: '마' },
+  ];
+  const ids = candidates(netflix, txns, '2026-09').map((t) => t.id);
+  assert.equal(ids[0], 'near');
+  assert.ok(!ids.includes('out'), '주기 밖의 거래는 빼야 한다');
+  assert.ok(!ids.includes('mine'), '다른 고정지출에 이미 붙은 거래는 빼야 한다');
+});
+
+test('금액이 달마다 다른 건은 날짜만 보고 고른다', () => {
+  const phone = { id: 'r3', name: 'SKT', expectedAmount: 55_000, dayOfMonth: 10, amountVaries: true };
+  const txns = [
+    { id: 'same', type: 'expense', amount: 55_000, occurredAt: '2026-09-18T10:00:00', merchantRaw: '가' },
+    { id: 'near', type: 'expense', amount: 120_000, occurredAt: '2026-09-10T10:00:00', merchantRaw: '나' },
+  ];
+  assert.equal(candidates(phone, txns, '2026-09')[0].id, 'near');
+});
+
+test('해지한 것은 한 달 고정지출에서 빠진다', () => {
+  assert.deepEqual(liveRecurring([netflix, { ...netflix, id: 'r2', active: false }]).map((r) => r.id), ['r1']);
 });

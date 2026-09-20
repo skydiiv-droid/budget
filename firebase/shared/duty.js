@@ -10,8 +10,12 @@
  *
  * 두 가지 모양을 다 받는다.
  *
- *   한 달치 한 줄   { "신OO": { "2026-09": "OOOEODD..." } }
- *   하루 한 글자    { "신OO": { "2026-09-01": "O", "2026-09-02": "O", … } }
+ *   한 달치 한 줄   { "홍길동": { "2026-09": "OOOEODD..." } }
+ *   하루 한 글자    { "홍길동": { "2026-09-01": "O", … } }
+ *   하루가 객체      { duties: { "2026-09": { "224051": { "01": { shift:"D", team:"A" } } } } }
+ *
+ * 마지막 모양이 실제로 쓰는 것이다. 사람이 **사번**이라 키가 숫자인데, 날짜도
+ * 숫자라 둘을 갈라야 한다 — 1~31 은 날짜고 그보다 긴 숫자는 사람이다.
  *
  * 읽기만 한다. 근무표 앱에는 아무것도 쓰지 않는다.
  */
@@ -53,16 +57,37 @@ function dayOf(key, month) {
 const looksLikeMonth = (v) => typeof v === 'string'
   && ONLY_DUTY.test(v) && letters(v) >= 20;
 
-/** 하루치 한 글자인가. */
-const looksLikeDay = (v) => typeof v === 'string' && v.length <= 2 && letters(v) === v.trim().length
-  && v.trim().length > 0;
+/** 하루치 값이 싸여 있을 때 듀티가 들어 있는 칸. */
+const SHIFT_FIELDS = ['shift', 'duty', 'type', 'code', 'kind', 'value', '근무'];
+
+/**
+ * 하루치 값에서 글자 하나를 꺼낸다.
+ *
+ * 그냥 "D" 로 적어 두기도 하고 `{ shift:"D", team:"A" }` 처럼 싸 두기도 한다.
+ * 못 꺼내면 빈 글자 — 그 날은 근무가 없는 것으로 본다.
+ */
+function dayLetter(value) {
+  const pick = (v) => {
+    if (typeof v !== 'string') return '';
+    const t = v.trim();
+    return t.length > 0 && t.length <= 2 && letters(t) === t.length ? t : '';
+  };
+  if (typeof value === 'string') return pick(value);
+  if (!value || typeof value !== 'object') return '';
+  for (const field of SHIFT_FIELDS) {
+    const got = pick(value[field]);
+    if (got) return got;
+  }
+  return '';
+}
 
 /**
  * 나무를 훑어 근무표를 다 찾는다.
  *
  * @returns [{ person, month, text, path }]  — text 는 1일부터 순서대로 이어 붙인 것
  */
-export function findDuties(tree, limit = 400) {
+export function findDuties(tree, opts = {}) {
+  const { month: hintMonth = '', limit = 400 } = typeof opts === 'number' ? { limit: opts } : opts;
   const out = [];
   const seen = new Set();
 
@@ -78,14 +103,14 @@ export function findDuties(tree, limit = 400) {
   const walk = (node, path) => {
     if (out.length >= limit || path.length > 8) return;
     if (typeof node === 'string') {
-      // 값 자체가 한 달치. 달은 경로에서 찾는다.
-      if (looksLikeMonth(node)) push(path, monthInPath(path), node);
+      // 값 자체가 한 달치. 달은 경로에서 찾고, 없으면 주소에서 읽은 달을 쓴다.
+      if (looksLikeMonth(node)) push(path, monthInPath(path) || hintMonth, node);
       return;
     }
     if (!node || typeof node !== 'object') return;
 
     // 하루 한 글자로 흩어 둔 모양인가
-    const byDay = collectDays(node, path);
+    const byDay = collectDays(node, path, hintMonth);
     for (const [month, text] of byDay) push([...path, month], month, text);
 
     for (const [key, value] of Object.entries(node)) walk(value, [...path, key]);
@@ -100,18 +125,19 @@ export function findDuties(tree, limit = 400) {
  *
  * 빠진 날은 `·` 로 메운다. 그래야 1일부터 세는 자리가 안 밀린다.
  */
-function collectDays(node, path) {
+function collectDays(node, path, hintMonth = '') {
   const months = new Map();
-  const hint = monthInPath(path);
+  const hint = monthInPath(path) || hintMonth;
 
   for (const [key, value] of Object.entries(node)) {
-    if (!looksLikeDay(value)) continue;
+    const letter = dayLetter(value);
+    if (!letter) continue;
     const month = monthOf(key) || hint;
     if (!month) continue;
     const day = dayOf(key, month);
     if (!day || day > 31) continue;
     if (!months.has(month)) months.set(month, new Map());
-    months.get(month).set(day, value.trim());
+    months.get(month).set(day, letter);
   }
 
   const out = [];
@@ -133,17 +159,20 @@ const monthInPath = (path) => {
   return '';
 };
 
+/** 1~31 은 날짜지 사람이 아니다. 사번처럼 더 긴 숫자는 사람이다. */
+const isDayKey = (k) => /^\d{1,2}$/.test(k) && Number(k) >= 1 && Number(k) <= 31;
+const isYearKey = (k) => /^(19|20)\d{2}$/.test(k);
+
 /**
  * 이 경로가 누구 것인가.
  *
- * 경로 키 중에 달도 숫자도 그릇 이름도 아닌 것이 사람이다. 그런 게 없으면
- * 그 자리의 객체에 적힌 `name` 을 본다 — 아이디로 갈라 두고 이름을 안에 적는
- * 앱이 많다.
+ * 경로 키 중에 달도 날짜도 그릇 이름도 아닌 것이 사람이다. 사번이면 숫자지만
+ * 날짜보다 기니 갈린다. 그런 키가 없으면 그 자리 객체에 적힌 `name` 을 본다.
  */
 export function personIn(path, tree) {
   for (let i = path.length - 1; i >= 0; i--) {
     const key = String(path[i]);
-    if (monthOf(key) || /^\d+$/.test(key) || CONTAINER.has(key.toLowerCase())) continue;
+    if (monthOf(key) || isDayKey(key) || isYearKey(key) || CONTAINER.has(key.toLowerCase())) continue;
     const named = nameAt(tree, path.slice(0, i + 1));
     return named || key;
   }
@@ -200,11 +229,16 @@ export function toShifts(month, text) {
   };
 }
 
-/** 근무표 앱 주소에서 읽을 주소를 만든다. 읽기 전용 REST 주소다. */
+/**
+ * 읽을 주소를 만든다. 읽기 전용 REST 주소다.
+ *
+ * 맨 위(`…app`)를 넣으면 데이터베이스 전체를 받는다. 사람이 여럿이고 달이
+ * 쌓이면 그게 다 딸려 오므로, `…/duties/2026-09` 처럼 좁혀 넣어도 되게 했다.
+ */
 export function dutyEndpoint(url) {
-  const base = String(url || '').trim().replace(/\/+$/, '');
-  if (!/^https:\/\/[^\s/]+\.firebasedatabase\.app$|^https:\/\/[^\s/]+\.firebaseio\.com$/.test(base)) {
-    return base && /^https:\/\//.test(base) ? `${base}/.json` : '';
-  }
-  return `${base}/.json`;
+  const base = String(url || '').trim().replace(/\/+$/, '').replace(/\.json$/, '');
+  return /^https:\/\/[^\s]+$/.test(base) ? `${base}/.json` : '';
 }
+
+/** 주소에 달이 적혀 있으면 (`…/duties/2026-09`) 그걸 힌트로 쓴다. */
+export const monthInUrl = (url) => monthOf(String(url || '').split('?')[0]);

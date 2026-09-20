@@ -24,7 +24,8 @@ import { search, knownTags, parseTags } from './shared/search.js';
 import { toCSV } from './shared/csv.js';
 import { detectRecurring } from './shared/detect.js';
 import { parseShiftText, shiftText, shiftStats, SHIFT_LABEL } from './shared/shifts.js';
-import { findDuties, dutyPeople, dutiesOf, toShifts, dutyEndpoint } from './shared/duty.js';
+import { findDuties, dutyPeople, dutiesOf, toShifts, dutyEndpoint, monthInUrl }
+  from './shared/duty.js';
 import { cardCheck, balanceCheck } from './shared/anchors.js';
 // candidates 는 취소 상계에서 쓰는 지역 변수와 이름이 겹친다. 갈아 두면
 // 한쪽을 고칠 때 다른 쪽이 조용히 가려지는 일이 없다.
@@ -1989,7 +1990,8 @@ function renderDutyImport(month) {
     <div class="field"><label>근무표 앱 주소</label>
       <input name="dutyUrl" type="url" inputmode="url" autocomplete="off"
         placeholder="https://…firebasedatabase.app" value="${esc(url)}">
-      <div class="muted" style="margin-top:6px">근무표를 읽어만 옵니다. 그쪽 앱은 바뀌지 않습니다.</div></div>
+      <div class="muted" style="margin-top:6px">근무표를 읽어만 옵니다. 그쪽 앱은 바뀌지 않습니다.
+        맨 위 주소를 넣으면 전부 뒤지고, <b>…/duties/2026-09</b> 처럼 좁혀 넣으면 그 달만 받습니다.</div></div>
     <div class="acts" style="justify-content:flex-start">
       <button type="submit" class="act ghost small">주소 저장</button>
       ${url ? '<button type="button" class="act primary small" id="dutyLoad">불러오기</button>' : ''}
@@ -2056,7 +2058,9 @@ async function loadDuty() {
       dutyFound = { error: `불러오지 못했습니다 (${res.status})` };
     } else {
       const tree = await res.json();
-      dutyFound = tree ? { duties: findDuties(tree) } : { error: '비어 있습니다' };
+      // 주소를 달까지 좁혀 넣었으면 받은 값에는 달이 없다. 주소에서 읽어 넘긴다.
+      const month = monthInUrl(D.settings.dutyUrl);
+      dutyFound = tree ? { duties: findDuties(tree, { month }) } : { error: '비어 있습니다' };
     }
   } catch (err) {
     dutyFound = { error: `닿지 못했습니다 — ${err.message}` };

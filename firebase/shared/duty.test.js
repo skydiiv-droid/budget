@@ -4,7 +4,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findDuties, dutyPeople, dutiesOf, toShifts, monthOf, dutyEndpoint, personIn } from './duty.js';
+import { findDuties, dutyPeople, dutiesOf, toShifts, monthOf, dutyEndpoint, personIn,
+         monthInUrl } from './duty.js';
 
 // 30일치 — 실제 근무표와 같은 모양의 가짜 값
 const SEP = 'OOOEODDONNNODEOOENNNOOEEODDDOD';
@@ -153,4 +154,79 @@ test('너무 깊은 나무에서 헤매지 않는다', () => {
   let deep = SEP;
   for (let i = 0; i < 12; i++) deep = { [`d${i}`]: deep };
   assert.doesNotThrow(() => findDuties(deep));
+});
+
+// ── 실제로 쓰는 모양 ─────────────────────────────────────
+// duties/{YYYY-MM}/{사번} → { "01": { shift:"D", team:"A" }, "02": {…}, … }
+const real = (text, month = '2026-09') => Object.fromEntries(
+  [...text].map((ch, i) => [String(i + 1).padStart(2, '0'), { shift: ch, team: 'A' }]));
+
+test('하루가 객체로 싸여 있어도 shift 를 꺼낸다', () => {
+  const tree = { duties: { '2026-09': { 224051: real(SEP) } } };
+  const found = findDuties(tree);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].text, SEP);
+  assert.equal(found[0].month, '2026-09');
+  assert.equal(found[0].person, '224051', '사번이 사람이다');
+});
+
+test('사번이 숫자여도 날짜와 헷갈리지 않는다', () => {
+  const tree = { duties: { '2026-09': { 224051: real(SEP), 224052: real(AUG.slice(0, 30)) } } };
+  assert.deepEqual(dutyPeople(findDuties(tree)).map((p) => p.person).sort(), ['224051', '224052']);
+});
+
+test('team 은 사람이 아니라 딸린 값이다', () => {
+  const tree = { duties: { '2026-09': { 224051: real(SEP) } } };
+  assert.equal(findDuties(tree)[0].person, '224051');
+});
+
+test('실제 모양에서 날짜가 안 밀린다', () => {
+  const tree = { duties: { '2026-09': { 224051: real(SEP) } } };
+  const out = toShifts('2026-09', findDuties(tree)[0].text);
+  assert.equal(out.ok, true);
+  assert.equal(out.count, 30);
+  assert.equal(out.days['2026-09-01'], 'off');
+  assert.equal(out.days['2026-09-04'], 'evening');
+  assert.equal(out.days['2026-09-09'], 'night');
+  assert.equal(out.days['2026-09-30'], 'day');
+});
+
+test('근무 없는 날은 자리만 비우고 넘어간다', () => {
+  const days = real(SEP);
+  delete days['05'].shift;                       // 그 날만 근무가 안 적혀 있다
+  days['06'] = { team: 'A' };                    // 아예 비어 있다
+  const found = findDuties({ duties: { '2026-09': { 224051: days } } });
+  assert.equal(found[0].text[4], '·');
+  assert.equal(found[0].text[5], '·');
+  assert.equal(found[0].text.length, 30, '뒷날이 밀리지 않는다');
+});
+
+test('주소를 달까지 좁혀 넣으면 그 달로 읽는다', () => {
+  // …/duties/2026-09.json 을 부르면 나무에 달이 없다
+  const tree = { 224051: real(SEP), 224052: real(AUG.slice(0, 30)) };
+  assert.deepEqual(findDuties(tree), [], '힌트가 없으면 달을 모른다');
+
+  const found = findDuties(tree, { month: '2026-09' });
+  assert.equal(found.length, 2);
+  assert.equal(found.find((d) => d.person === '224051').text, SEP);
+});
+
+test('주소에서 달을 읽어낸다', () => {
+  assert.equal(monthInUrl('https://x.firebasedatabase.app/duties/2026-09'), '2026-09');
+  assert.equal(monthInUrl('https://x.firebasedatabase.app/duties/2026-09/224051.json'), '2026-09');
+  assert.equal(monthInUrl('https://x.firebasedatabase.app'), '');
+});
+
+test('좁힌 주소에도 .json 을 붙이고 두 번 붙이지 않는다', () => {
+  assert.equal(dutyEndpoint('https://x.firebasedatabase.app/duties/2026-09'),
+    'https://x.firebasedatabase.app/duties/2026-09/.json');
+  assert.equal(dutyEndpoint('https://x.firebasedatabase.app/duties/2026-09.json'),
+    'https://x.firebasedatabase.app/duties/2026-09/.json');
+});
+
+test('사번 하나까지 좁혀 넣어도 읽는다', () => {
+  const found = findDuties(real(SEP), { month: '2026-09' });
+  assert.equal(found.length, 1);
+  assert.equal(found[0].text, SEP);
+  assert.equal(found[0].person, '', '경로에 사람이 없으면 이름은 비워 둔다');
 });

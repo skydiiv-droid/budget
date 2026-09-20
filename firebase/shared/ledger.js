@@ -431,3 +431,25 @@ export function trend(data = {}, months = 6, now = new Date()) {
   }
   return out;
 }
+
+/**
+ * 어디에 제일 많이 썼나. 위젯처럼 몇 줄 안 들어가는 자리에 쓴다.
+ *
+ * 큰 갈래로 접어 올린 뒤 위에서 몇 개만 자른다. 하위까지 늘어놓으면
+ * "카페 3천 · 편의점 2천"처럼 잔돈이 앞을 차지해 정작 큰 게 안 보인다.
+ */
+export function topSpending(rows = [], categories = [], count = 3) {
+  const b = breakdown(rows, categories);
+  const find = (id) => categories.find((c) => c.id === id);
+  return b.items.slice(0, count).map((it) => {
+    const c = find(it.id);
+    return {
+      id: it.id,
+      name: c?.name || it.id,
+      icon: c?.icon || '',
+      amount: it.amount,
+      pct: it.pct,
+      count: it.count,
+    };
+  });
+}

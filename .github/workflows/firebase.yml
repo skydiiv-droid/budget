@@ -43,7 +43,7 @@ jobs:
           cp -r firebase/shared firebase/public/shared
 
       - name: 테스트
-        run: node --test firebase/shared/*.test.js
+        run: node --test firebase/shared/*.test.js widget/*.test.js
 
       - name: 인증 정보 준비
         env:

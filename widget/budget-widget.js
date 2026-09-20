@@ -14,6 +14,7 @@
  *   잠금화면 원     게이지 + 남은 돈
  *   작은 위젯       오늘 쓸 수 있는 돈 + 이 달 진행
  *   중간 위젯       거기에 다음 카드값과 지난달 견줌까지
+ *   큰 위젯         이 달 총액 · 예산 대비 · 하루 평균 · 이 속도면 · 어디에 썼나
  */
 
 const TOKEN = '여기에-위젯-비밀번호';
@@ -28,10 +29,28 @@ const INK = new Color('#10151C');
 const MUTED = new Color('#5B6573');
 
 const won = (n) => '₩' + Math.round(Number(n) || 0).toLocaleString('ko-KR');
+
+/** 좁은 자리용. "186천"은 한국어가 아니다 — 만 단위로 끊는다. */
 const short = (n) => {
   const v = Math.round(Number(n) || 0);
-  return v >= 10000 ? `${Math.round(v / 1000).toLocaleString('ko-KR')}천` : won(v);
+  if (v < 10000) return won(v);
+  const man = v / 10000;
+  return `${man >= 10 ? Math.round(man) : man.toFixed(1)}만`;
 };
+
+/**
+ * 막대에 쓸 폭.
+ *
+ * Scriptable 은 남은 자리를 알려 주지 않아 숫자를 박아야 하는데, 박으면 작은
+ * 폰에서 넘치고 큰 폰에서 짧아 보인다. 화면 너비에서 되짚어 낸다.
+ */
+function barWidth(pad = 28) {
+  try {
+    return Math.max(210, Math.min(320, Math.round(Device.screenSize().width * 0.78) - pad));
+  } catch {
+    return 250;
+  }
+}
 
 async function load() {
   const req = new Request(`${URL}?token=${encodeURIComponent(TOKEN)}`);
@@ -81,16 +100,26 @@ function accessoryRectangular(w, d) {
                                      { size: 11, opacity: 0.7 });
 }
 
-function bar(stack, pct, color) {
+function bar(stack, pct, color, width = 140, height = 6) {
   const row = stack.addStack();
-  row.size = new Size(0, 6);
-  row.cornerRadius = 3;
+  row.size = new Size(width, height);
+  row.cornerRadius = height / 2;
   row.backgroundColor = new Color('#E4EAF2');
   const fill = row.addStack();
-  fill.size = new Size(Math.max(4, Math.min(140, Math.round(140 * (pct / 100)))), 6);
-  fill.cornerRadius = 3;
+  fill.size = new Size(Math.max(height, Math.round(width * (Math.min(100, pct) / 100))), height);
+  fill.cornerRadius = height / 2;
   fill.backgroundColor = color;
   row.addSpacer();
+}
+
+/** 값을 오른쪽에 붙여 한 줄로. 라벨과 숫자가 멀어야 둘 다 읽힌다. */
+function row(stack, label, value, opts = {}) {
+  const line = stack.addStack();
+  line.centerAlignContent();
+  text(line, label, { size: opts.small ? 11 : 12.5, color: MUTED });
+  line.addSpacer();
+  text(line, value, { size: opts.small ? 12 : 15, bold: true, color: opts.color || INK });
+  return line;
 }
 
 function small(w, d) {
@@ -100,7 +129,7 @@ function small(w, d) {
   text(w, won(h.value), { size: 24, bold: true, color: h.color });
   w.addSpacer(8);
   if (d.budget) {
-    bar(w, Math.min(100, d.usedPct), d.usedPct > 100 ? WARN : BLUE);
+    bar(w, Math.min(100, d.usedPct), d.usedPct > 100 ? WARN : BLUE, barWidth(140));
     w.addSpacer(5);
     text(w, `${d.usedPct}% · ${d.daysLeft}일 남음`, { size: 11, color: MUTED });
   } else {
@@ -145,6 +174,71 @@ function medium(w, d) {
   }
 }
 
+/**
+ * 큰 위젯.
+ *
+ * 자리가 넉넉하니 "얼마 썼나"에서 끝내지 않고 "그래서 이 달이 어떻게 되나"까지
+ * 내려간다. 총액 → 예산 대비 → 하루 평균 → 이 속도면 얼마 → 어디에 썼나.
+ * 위에서 아래로 갈수록 좁아지는 순서다.
+ */
+function large(w, d) {
+  const over = d.budget && d.spent > d.budget;
+
+  // ── 이 달에 쓴 돈 ───────────────────────────────────────
+  const head = w.addStack();
+  head.centerAlignContent();
+  text(head, '이 달에 쓴 돈', { size: 12, color: MUTED });
+  head.addSpacer();
+  if (d.days) text(head, `${d.dayOf}/${d.days}일`, { size: 11, color: MUTED });
+
+  w.addSpacer(4);
+  text(w, won(d.spent), { size: 34, bold: true, color: over ? WARN : INK });
+
+  if (d.budget) {
+    w.addSpacer(9);
+    bar(w, d.usedPct, over ? WARN : BLUE, barWidth(), 7);
+    w.addSpacer(5);
+    text(w, `예산 ${won(d.budget)} 중 ${d.usedPct}%${
+      over ? ` · ${won(d.spent - d.budget)} 넘음` : ` · 남은 ${d.daysLeft}일`}`,
+      { size: 11, color: over ? WARN : MUTED });
+  }
+
+  // ── 하루 평균 · 이 속도면 ────────────────────────────────
+  w.addSpacer(12);
+  row(w, '하루 평균', won(d.dailyAvg || 0));
+  w.addSpacer(6);
+  const end = d.budget ? (d.projected > d.budget ? WARN : UP) : INK;
+  row(w, '이 속도면 이 달은', won(d.projected || 0), { color: end });
+  if (d.budget) {
+    w.addSpacer(2);
+    const gap = (d.projected || 0) - d.budget;
+    text(w, gap > 0 ? `예산보다 ${won(gap)} 넘겨요` : `예산보다 ${won(-gap)} 적어요`,
+      { size: 11, color: gap > 0 ? WARN : MUTED });
+  }
+
+  // ── 어디에 썼나 ─────────────────────────────────────────
+  // 자리가 셋뿐이다. 서버가 더 줘도 넘치게 그리지 않는다.
+  const top = (d.top || []).slice(0, 3);
+  if (!top.length) return;
+
+  w.addSpacer(12);
+  text(w, '어디에 썼나', { size: 12, color: MUTED });
+  w.addSpacer(6);
+
+  const most = top[0].amount || 1;
+  for (const c of top) {
+    const line = w.addStack();
+    line.centerAlignContent();
+    text(line, `${c.icon} ${c.name}`.trim(), { size: 12.5 });
+    line.addSpacer();
+    text(line, won(c.amount), { size: 12.5, bold: true });
+    text(line, `  ${c.pct}%`, { size: 11, color: MUTED });
+    w.addSpacer(3);
+    bar(w, Math.round((c.amount / most) * 100), BLUE, barWidth(), 4);
+    w.addSpacer(7);
+  }
+}
+
 function oops(w, err) {
   text(w, '가계부', { size: 12, color: MUTED });
   w.addSpacer(4);
@@ -166,7 +260,8 @@ try {
   if (family === 'accessoryInline') accessoryInline(w, d);
   else if (family === 'accessoryCircular') accessoryCircular(w, d);
   else if (family === 'accessoryRectangular') accessoryRectangular(w, d);
-  else if (family === 'medium' || family === 'large') medium(w, d);
+  else if (family === 'large') large(w, d);
+  else if (family === 'medium') medium(w, d);
   else small(w, d);
   // 문자가 들어올 때마다 바뀌니 자주 다시 그린다. 실제 주기는 iOS 가 정한다.
   w.refreshAfterDate = new Date(Date.now() + 20 * 60 * 1000);
@@ -176,5 +271,6 @@ try {
 }
 
 if (config.runsInWidget) Script.setWidget(w);
+else if (config.widgetFamily === 'large') await w.presentLarge();
 else await w.presentMedium();
 Script.complete();

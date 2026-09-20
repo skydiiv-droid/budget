@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 
 import { parseMessage, normalizeMerchant, splitMessages } from './shared/parse.js';
 import { classify, suggestKeyword } from './shared/classify.js';
-import { ledger, monthSpending, sameSpanLastMonth, pace } from './shared/ledger.js';
+import { ledger, monthSpending, sameSpanLastMonth, pace, topSpending } from './shared/ledger.js';
 
 initializeApp();
 const db = getFirestore();
@@ -287,19 +287,21 @@ export const summary = onRequest(
       since.setMonth(since.getMonth() - 1);
       since.setDate(1);
 
-      const [txnSnap, accSnap, recSnap, setSnap, rawSnap] = await Promise.all([
+      const [txnSnap, accSnap, recSnap, setSnap, rawSnap, catSnap] = await Promise.all([
         base.collection('txns').where('occurredAt', '>=', since.toISOString()).get(),
         base.collection('accounts').get(),
         base.collection('recurring').get(),
         base.collection('meta').doc('settings').get(),
         base.collection('raw').where('parsedOk', '==', false).get(),
+        base.collection('categories').get(),
       ]);
 
       const settings = setSnap.exists ? setSnap.data() : {};
       const transactions = asArray(txnSnap);
       const accounts = asArray(accSnap);
 
-      const L = ledger({ transactions, accounts, recurring: asArray(recSnap),
+      const categories = asArray(catSnap);
+      const L = ledger({ transactions, accounts, categories, recurring: asArray(recSnap),
                          settlements: [], raw: [], settings });
       const spent = monthSpending({ transactions, settlements: [], settings });
       const total = spent.reduce((s, r) => s + (r.counted ? r.net : 0), 0);
@@ -317,6 +319,13 @@ export const summary = onRequest(
         daysLeft: L.budget.daysLeft,
         usedPct: L.budget.usedPct,
         projected: run.projected,
+        dayOf: run.dayOf,
+        days: run.days,
+        // 하루 평균은 "오늘 쓸 수 있는 돈"(perDay)과 다르다. 이건 이미 쓴 것을
+        // 지난 날수로 나눈 것이고, perDay 는 남은 예산을 남은 날수로 나눈 것이다.
+        dailyAvg: run.dayOf > 0 ? Math.round(total / run.dayOf) : 0,
+        // 갈래 이름은 가맹점명이 아니다. "식비 13만"까지는 나가도 되는 것으로 본다.
+        top: topSpending(spent, categories, 3),
         lastMonthSameSpan: prev.total,
         debt: L.debt.total,
         goalPct: L.goal.pct,

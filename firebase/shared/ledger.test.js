@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ledger, matchRecurring, monthSpending, breakdown, shiftMonth, monthWindow,
-         sameSpanLastMonth, pace, trend, fixedDueIn } from './ledger.js';
+         sameSpanLastMonth, pace, trend, fixedDueIn, topSpending } from './ledger.js';
 
 const NOW = new Date(2026, 8, 20, 12, 0);   // 2026-09-20
 const SETTINGS = { monthlyIncome: 2800000, variableBudget: 1300000, cycleStartDay: 1 };
@@ -350,4 +350,23 @@ test('이 달에 실제로 빠질 고정비만 따로 셀 수 있다', () => {
   ];
   assert.deepEqual(fixedDueIn(list, '2026-09').map((r) => r.id), ['r1']);
   assert.deepEqual(fixedDueIn(list, '2026-03').map((r) => r.id), ['r1', 'r2']);
+});
+
+test('제일 많이 쓴 갈래 몇 개만 자른다', () => {
+  const rows = monthSpending({ settings: SETTINGS, transactions: [
+    { id: 'a', type: 'expense', amount: 40_000, occurredAt: '2026-09-04T10:00:00', categoryId: 'cat_cafe' },
+    { id: 'b', type: 'expense', amount: 60_000, occurredAt: '2026-09-05T10:00:00', categoryId: 'cat_delivery' },
+    { id: 'c', type: 'expense', amount: 30_000, occurredAt: '2026-09-06T10:00:00', categoryId: 'cat_transport' },
+  ] }, '2026-09', NOW);
+
+  const top = topSpending(rows, [...CATS, { id: 'cat_food', name: '식비', icon: '🍚', parentId: '' }], 2);
+  assert.equal(top.length, 2);
+  assert.equal(top[0].name, '식비');
+  assert.equal(top[0].amount, 100_000, '하위까지 늘어놓으면 잔돈이 앞을 차지한다');
+  assert.equal(top[0].pct, 77);
+  assert.equal(top[1].name, '교통');
+});
+
+test('쓴 게 없으면 빈 목록이다', () => {
+  assert.deepEqual(topSpending([], CATS, 3), []);
 });

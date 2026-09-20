@@ -20,13 +20,33 @@
 const TOKEN = '여기에-위젯-비밀번호';
 const URL = 'https://summary-6ygn4mmscq-du.a.run.app';
 
-// 부호는 국내 관례 — 플러스가 빨강, 마이너스가 파랑
-const BLUE = new Color('#1D6FE0');
-const UP = new Color('#C7362B');
-const DOWN = new Color('#1D6FE0');
-const WARN = new Color('#C08A1E');
-const INK = new Color('#10151C');
-const MUTED = new Color('#5B6573');
+/**
+ * 색.
+ *
+ * 위젯 바탕은 시스템 테마를 따라간다. 밝은 모드 기준으로 글자색을 박으면
+ * 다크 모드에서 어두운 바탕에 어두운 글자가 되어 아무것도 안 보인다.
+ * 두 벌을 다 들고 다니고 iOS 가 그릴 때 고르게 한다.
+ *
+ * 다크 쪽은 밝은 쪽을 그냥 뒤집은 게 아니라 어두운 바탕에 맞춰 따로 골랐다.
+ * 부호는 국내 관례 — 플러스가 빨강, 마이너스가 파랑.
+ */
+function dyn(light, dark) {
+  const l = new Color(light);
+  try {
+    return Color.dynamic(l, new Color(dark));
+  } catch {
+    return l;                      // 아주 옛 Scriptable 이면 밝은 쪽으로
+  }
+}
+
+const SURFACE = dyn('#FFFFFF', '#161A20');
+const INK = dyn('#10151C', '#F2F5F9');     // 15.97:1 / 18.32:1
+const MUTED = dyn('#5B6573', '#98A4B3');   //  5.91:1 /  6.90:1
+const BLUE = dyn('#1D6FE0', '#4E86DE');
+const DOWN = BLUE;                          // 나간 돈 · 빚
+const UP = dyn('#C7362B', '#D9604F');       // 들어온 돈 · 잔고
+const WARN = dyn('#C08A1E', '#E0AE4A');     // 예산 넘김 — 부호가 아니라 경고다
+const TRACK = dyn('#E4EAF2', '#2A3340');
 
 const won = (n) => '₩' + Math.round(Number(n) || 0).toLocaleString('ko-KR');
 
@@ -104,7 +124,7 @@ function bar(stack, pct, color, width = 140, height = 6) {
   const row = stack.addStack();
   row.size = new Size(width, height);
   row.cornerRadius = height / 2;
-  row.backgroundColor = new Color('#E4EAF2');
+  row.backgroundColor = TRACK;
   const fill = row.addStack();
   fill.size = new Size(Math.max(height, Math.round(width * (Math.min(100, pct) / 100))), height);
   fill.cornerRadius = height / 2;
@@ -253,6 +273,14 @@ function oops(w, err) {
 const w = new ListWidget();
 w.url = 'https://budget-13aec.web.app';
 w.setPadding(12, 14, 12, 14);
+
+/**
+ * 잠금화면 위젯은 iOS 가 제 방식으로 칠한다 — 바탕을 주면 네모 상자가 생긴다.
+ * 홈 화면 위젯에만 바탕을 깐다. 깔아 두면 대비가 계산대로 유지된다.
+ */
+if (!String(config.widgetFamily || '').startsWith('accessory')) {
+  w.backgroundColor = SURFACE;
+}
 
 try {
   const d = await load();

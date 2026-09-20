@@ -101,3 +101,60 @@ test('좁은 자리 숫자는 만 단위로 끊는다', async () => {
   const out = await draw('medium');
   assert.match(out, /18\.6만|19만/, '"186천" 은 한국어가 아니다');
 });
+
+// ───────────────────────────────────────────────── 어느 테마에서도 보이게
+
+/** 그려진 글자마다 어떤 색이 쓰였는지 모은다. */
+function colorsIn(node, out = []) {
+  for (const c of node.children) {
+    if (c.kind === 'text') out.push({ text: c.text, color: c.color });
+    else colorsIn(c, out);
+  }
+  return out;
+}
+
+async function paint(family) {
+  globalThis.__DATA = DATA;
+  const { root } = install(family);
+  const src = `${source('budget-widget.js')}\n// paint-${family}-${Math.random()}`;
+  await import(`data:text/javascript;base64,${Buffer.from(src).toString('base64')}`);
+  return root;
+}
+
+test('글자색이 두 테마를 다 들고 있다', async () => {
+  const flat = [];
+  for (const family of ['large', 'medium', 'small']) {
+    for (const t of colorsIn(await paint(family))) {
+      if (!t.color) { flat.push(`${family}: "${t.text}" 색이 없음`); continue; }
+      if (!t.color.dynamic) flat.push(`${family}: "${t.text}" ${t.color.hex}`);
+    }
+  }
+  assert.deepEqual(flat, [],
+    '한 벌만 박으면 반대 테마에서 어두운 바탕에 어두운 글자가 된다');
+});
+
+test('홈 화면 위젯에는 바탕을 깐다', async () => {
+  for (const family of ['large', 'medium', 'small']) {
+    const root = await paint(family);
+    assert.ok(root.props.bg?.dynamic, `${family} 에 바탕이 없다 — 대비를 장담할 수 없다`);
+  }
+});
+
+test('잠금화면 위젯에는 바탕을 깔지 않는다', async () => {
+  for (const family of ['accessoryRectangular', 'accessoryCircular', 'accessoryInline']) {
+    const root = await paint(family);
+    assert.ok(!root.props.bg, `${family} 에 바탕을 주면 네모 상자가 생긴다`);
+  }
+});
+
+test('막대 바탕도 테마를 따라간다', async () => {
+  const root = await paint('large');
+  const bars = [];
+  const walk = (n) => {
+    if (n.props?.bg && n.props?.size) bars.push(n.props.bg);
+    n.children.forEach(walk);
+  };
+  walk(root);
+  assert.ok(bars.length >= 2, '막대를 못 찾았다 — 검사가 헛돌고 있다');
+  assert.ok(bars.every((b) => b.dynamic), '트랙이 밝은 회색 하나면 다크에서 허옇게 뜬다');
+});

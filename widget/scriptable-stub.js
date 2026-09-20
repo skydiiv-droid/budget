@@ -36,11 +36,15 @@ export function install(family) {
   const root = mk('root', null);
   const w = stackApi(root);
   w.setPadding = () => {};
+  Object.defineProperty(w, 'backgroundColor', { set(v) { root.props.bg = v; } });
   Object.defineProperty(w, 'refreshAfterDate', { set() {} });
   Object.defineProperty(w, 'url', { set() {} });
 
   globalThis.ListWidget = function () { return w; };
   globalThis.Color = function (hex) { return { hex }; };
+  // 두 벌을 다 들고 있는 색. 이걸 안 거치면 한쪽 모드에서 안 보인다.
+  globalThis.Color.dynamic = (light, dark) =>
+    ({ dynamic: [light.hex, dark.hex], hex: light.hex });
   globalThis.Font = { systemFont: () => ({}), boldSystemFont: () => ({}) };
   globalThis.Size = function (a, b) { return { w: a, h: b }; };
   globalThis.Script = { setWidget() {}, complete() {} };

@@ -170,3 +170,42 @@ test('가맹점을 못 찾으면 null 이다', () => {
 test('카드 문자가 아니면 상품명은 비어 있다', () => {
   assert.equal(detectCardName(REAL_WOORI), '');
 });
+
+// ───────────────────────────────────────────────── 여러 통 자르기
+
+import { splitMessages } from './parse.js';
+
+const HYUNDAI = (amount, cum) => `[Web발신]
+현대 이마트Plus 승인
+신*우
+${amount}원 일시불
+09/19 19:14
+컴포즈커피발산
+누적${cum}원`;
+
+test('붙여 넣은 여러 통을 한 통씩 자른다', () => {
+  const both = HYUNDAI('1,800', '3,634,067') + '\n' + HYUNDAI('4,300', '3,638,367');
+  const out = splitMessages(both);
+  assert.equal(out.length, 2, '열 건을 열 번 공유하게 둘 수는 없다');
+  assert.ok(out[0].includes('1,800') && !out[0].includes('4,300'));
+  assert.ok(out[1].startsWith('[Web발신]'));
+});
+
+test('한 통이면 한 통으로 둔다', () => {
+  assert.deepEqual(splitMessages(HYUNDAI('1,800', '3,634,067')).length, 1);
+});
+
+test('[Web발신] 이 없으면 빈 줄로 가른다', () => {
+  const two = '우리 09/19 14:16\n출금 30,000\n잔액 812,400\n\n우리 09/19 15:02\n입금 50,000\n잔액 862,400';
+  assert.equal(splitMessages(two).length, 2);
+});
+
+test('한 통 안의 빈 줄 때문에 쪼개지 않는다', () => {
+  const one = '현대 이마트Plus 승인\n\n1,800원 일시불\n\n컴포즈커피발산';
+  assert.equal(splitMessages(one).length, 1, '억지로 자르면 한 건이 두 건이 된다');
+});
+
+test('빈 글은 아무것도 안 준다', () => {
+  assert.deepEqual(splitMessages(''), []);
+  assert.deepEqual(splitMessages('   \n  '), []);
+});

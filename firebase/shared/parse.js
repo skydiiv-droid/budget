@@ -313,3 +313,34 @@ export function resolveDate(month, day, hour, minute, receivedAt) {
 function hasAny(text, words) {
   return words.some((w) => text.includes(w));
 }
+
+/**
+ * 여러 통이 붙어 온 걸 한 통씩 자른다.
+ *
+ * 며칠 놓친 문자를 한꺼번에 넣으려면 한 건씩 공유하는 수밖에 없었다. 열 건이면
+ * 열 번이다. 통째로 붙여 넣고 알아서 갈리게 한다.
+ *
+ * 국내 카드·은행 문자는 거의 다 [Web발신] 로 시작한다. 그게 없으면 빈 줄로
+ * 가른다. 둘 다 아니면 한 통으로 둔다 — 억지로 자르면 한 건이 두 건이 된다.
+ */
+export function splitMessages(text) {
+  const whole = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!whole) return [];
+
+  const marks = [...whole.matchAll(/\[\s*Web\s*발신\s*\]/gi)].map((m) => m.index);
+  if (marks.length >= 2) {
+    return marks
+      .map((start, i) => whole.slice(start, marks[i + 1] ?? whole.length).trim())
+      .filter(Boolean);
+  }
+
+  if (marks.length <= 1) {
+    const blocks = whole.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
+    // 한 통 안에서도 줄 사이가 비어 있을 수 있다. 토막이 **전부** 금액을 품고
+    // 있을 때만 여러 통으로 본다 — 하나라도 아니면 한 통이 쪼개진 것이다.
+    const hasMoney = (b) => /\d[\d,]{2,}\s*원|\d{1,3}(,\d{3})+/.test(b);
+    if (blocks.length >= 2 && blocks.every(hasMoney)) return blocks;
+  }
+
+  return [whole];
+}

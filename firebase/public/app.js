@@ -24,6 +24,7 @@ import { search, knownTags, parseTags } from './shared/search.js';
 import { toCSV } from './shared/csv.js';
 import { detectRecurring } from './shared/detect.js';
 import { parseShiftText, shiftText, shiftStats, SHIFT_LABEL } from './shared/shifts.js';
+import { cardCheck, balanceCheck } from './shared/anchors.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
 import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
@@ -290,7 +291,7 @@ async function migrateDebts() {
 
 async function refresh() {
   const [categories, rules, merchants, accounts, recurring, settlements,
-         txns, raw, settingsSnap, shiftSnap] =
+         txns, raw, settingsSnap, shiftSnap, anchors] =
     await Promise.all([
       readAll('categories'), readAll('rules'), readAll('merchants'), readAll('accounts'),
       readAll('recurring'), readAll('settlements'),
@@ -300,6 +301,9 @@ async function refresh() {
         .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }))),
       getDoc(doc(db, 'users', uid, 'meta', 'settings')),
       getDoc(doc(db, 'users', uid, 'meta', 'shifts')),
+      getDocs(query(col('anchors'), orderBy('at', 'desc'), limit(120)))
+        .then((x) => x.docs.map((d) => ({ id: d.id, ...d.data() })))
+        .catch(() => []),
     ]);
 
   const settings = settingsSnap.exists() ? settingsSnap.data() : { ...SETTINGS };
@@ -307,7 +311,7 @@ async function refresh() {
   const ingest = ingestSnap?.exists() ? ingestSnap.data() : {};
   const shifts = shiftSnap.exists() ? (shiftSnap.data().days || {}) : {};
   D = { categories, rules, merchants, accounts, recurring, settlements,
-        txns, raw, settings, ingest, shifts };
+        txns, raw, settings, ingest, shifts, anchors };
   D.ledger = ledger({ transactions: txns, recurring, settlements, accounts,
                       categories, raw, settings });
 
@@ -932,7 +936,7 @@ function renderInbox() {
   const unparsed = D.raw.filter((r) => !r.parsedOk && !r.txnId);
   const cancels = openCancels(D.txns);
   const found = detectRecurring({ transactions: D.txns, recurring: D.recurring, settings: D.settings });
-  let h = '';
+  let h = renderPaste() + renderCheck();
 
   if (found.length) {
     h += `<div class="lbl" style="margin:2px 0 4px">이거 고정비 아니에요 · ${found.length}건</div>
@@ -989,7 +993,8 @@ function renderInbox() {
   }
 
   if (!pending.length && !unparsed.length && !cancels.length && !found.length) {
-    $('inbox').innerHTML = `<div class="card"><div class="empty">정리할 게 없어요.<br>분류하지 못한 결제가 생기면 여기에 쌓입니다.</div></div>`;
+    $('inbox').innerHTML = h
+      + `<div class="card"><div class="empty">정리할 게 없어요.<br>분류하지 못한 결제가 생기면 여기에 쌓입니다.</div></div>`;
     return;
   }
 
@@ -1053,6 +1058,81 @@ function renderInbox() {
  * 하나뿐이면 그 자리에서 정해진다. "배달 · 외식 · 카페"를 한 줄에 늘어놓는 것보다
  * "식비"를 먼저 고르는 편이 생각이 적다.
  */
+/**
+ * 문자 붙여넣기.
+ *
+ * 놓친 문자를 한 건씩 공유하려면 열 건이면 열 번이다. 문자 앱에서 여러 통을
+ * 골라 복사해 통째로 붙여 넣으면 알아서 갈린다.
+ */
+function renderPaste() {
+  return `<details class="fold" data-fold="paste" ${openFold.has('paste') ? 'open' : ''}>
+    <summary><span class="fold-t">문자 붙여넣기</span>
+      <span class="fold-s">놓친 결제 채우기</span><span class="fold-x"></span></summary>
+    <div class="fold-b">
+      <div class="muted" style="margin-bottom:11px">문자 앱에서 놓친 문자를 복사해 붙여 넣으세요.
+        여러 통을 한꺼번에 넣어도 알아서 갈립니다. 이미 들어간 건 저절로 걸러져요.</div>
+      <form data-form="paste">
+        <div class="field"><label>문자 원문</label>
+          <textarea name="body" rows="5" placeholder="[Web발신]&#10;현대 이마트Plus 승인&#10;1,800원 일시불&#10;…"
+            style="width:100%;font:inherit;font-size:14px;padding:11px 12px;background:#fff;
+                   border:1px solid #D3DCE6;border-radius:10px;resize:vertical"></textarea></div>
+        <button type="submit" class="act primary" style="width:100%">넣기</button>
+      </form></div></details>`;
+}
+
+/**
+ * 문자에 찍힌 숫자와 우리가 센 숫자를 맞춰 본다.
+ *
+ * 놓친 걸 놓친 줄 모르는 게 제일 나쁘다. 합계가 조용히 틀려 있으니까.
+ * 카드 문자의 누적과 은행 문자의 잔액은 카드사·은행이 센 숫자라 진실이다.
+ */
+function renderCheck() {
+  const cards = cardCheck({ anchors: D.anchors, transactions: D.txns, accounts: D.accounts })
+    .filter((c) => !c.ok);
+  const banks = balanceCheck({ anchors: D.anchors, accounts: D.accounts })
+    .filter((b) => b.stale && !b.ok);
+  if (!cards.length && !banks.length) return '';
+
+  let h = '';
+  for (const c of cards) {
+    h += `<div class="card">
+      <div class="row"><span class="lbl grow">${esc(c.name)} — 카드사가 센 것과 달라요</span></div>
+      <div class="row" style="padding:7px 0">
+        <span class="grow" style="font-size:13px;color:var(--ink2)">카드사 누적</span>
+        <span class="num" style="font-size:14px;font-weight:600">${won(c.reported)}</span></div>
+      <div class="row" style="padding:7px 0">
+        <span class="grow" style="font-size:13px;color:var(--ink2)">우리가 센 것</span>
+        <span class="num" style="font-size:14px;font-weight:600">${won(c.counted)}</span></div>
+      <div class="hr"></div>
+      <div class="row">
+        <span class="grow" style="font-size:13.5px;font-weight:600">${c.missing ? '안 들어온 결제' : '더 들어온 결제'}</span>
+        <span class="big num" style="font-size:22px;color:var(--spend)">${won(Math.abs(c.gap))}</span></div>
+      <div class="note ${c.missing ? 'warn' : 'ok'}" style="margin:13px 0 0">${c.missing
+        ? `문자가 안 온 결제가 <b class="num">${won(c.missing)}</b>어치 있어요.
+           위에서 그 문자를 붙여 넣으면 채워집니다.`
+        : `우리 쪽에 <b class="num">${won(c.extra)}</b>이 더 잡혀 있어요.
+           취소된 건이 안 지워졌거나 같은 결제가 두 번 들어왔을 수 있어요.`}
+        <br><span class="muted">${esc(String(c.at).slice(5, 16).replace('T', ' '))} 문자 기준</span></div>
+      </div>`;
+  }
+
+  for (const b of banks) {
+    h += `<div class="card">
+      <div class="row"><span class="lbl grow">${esc(b.name)} 잔고가 오래됐어요</span></div>
+      <div class="row" style="padding:9px 0">
+        <span class="grow" style="font-size:13px;color:var(--ink2)">문자에 찍힌 잔액</span>
+        <span class="num" style="font-size:16px;font-weight:700">${won(b.reported)}</span></div>
+      <div class="row" style="padding:0 0 9px">
+        <span class="grow" style="font-size:13px;color:var(--ink2)">앱에 적힌 것</span>
+        <span class="num" style="font-size:14px;font-weight:600;color:var(--ink3)">${won(b.held)}</span></div>
+      <button type="button" class="act primary" style="width:100%"
+        data-syncbal="${b.accountId}:${b.reported}">문자에 찍힌 값으로 맞추기</button>
+      <div class="muted" style="margin-top:9px">${esc(String(b.at).slice(5, 16).replace('T', ' '))} 문자예요.
+        은행이 센 숫자라 이게 정답이에요.</div></div>`;
+  }
+  return h;
+}
+
 function renderPicker(t, hintedId, ns = 'inbox', currentId = '') {
   const key = `${ns}:${t.id}`;
   // 아직 아무것도 안 건드렸으면 지금 들어 있는 칸을 펼쳐 둔다. null 은 일부러 닫은 것이다.
@@ -1945,6 +2025,17 @@ document.addEventListener('click', guard(async (e) => {
     return toast('치웠어요');
   }
 
+  const syncBal = e.target.closest('[data-syncbal]');
+  if (syncBal) {
+    const [id, value] = syncBal.dataset.syncbal.split(':');
+    await updateDoc(doc(col('accounts'), id), {
+      balance: Number(value) || 0,
+      balanceAt: new Date().toISOString(),
+    });
+    await refresh();
+    return toast('문자에 찍힌 값으로 맞췄어요');
+  }
+
   const addFixed = e.target.closest('[data-addfixed]');
   if (addFixed) {
     const f = detectRecurring({ transactions: D.txns, recurring: D.recurring, settings: D.settings })
@@ -2186,6 +2277,34 @@ document.addEventListener('submit', guard(async (e) => {
     });
     await refresh();
     return toast('고쳤어요');
+  }
+
+  if (form.dataset.form === 'paste') {
+    const body = String(values.body || '').trim();
+    if (!body) return toast('문자를 붙여 넣어 주세요');
+    const token = String(D.ingest?.token || '').trim();
+    if (!token) return toast('설정에서 문자 연결 비밀번호를 먼저 정해 주세요');
+
+    toast('넣는 중…');
+    const res = await fetch(ingestUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, body }),
+    });
+    const out = await res.json().catch(() => ({}));
+    form.reset();
+    await refresh();
+
+    if (out.status === 'batch') {
+      return toast([`${out.count}통 중`,
+        out.saved ? `${out.saved}건 넣음` : '',
+        out.duplicate ? `${out.duplicate}건은 이미 있음` : '',
+        out.failed ? `${out.failed}건은 못 읽음` : ''].filter(Boolean).join(' · '));
+    }
+    if (out.status === 'duplicate') return toast('이미 들어와 있는 문자예요');
+    if (out.status === 'parse_failed') return toast(`못 읽었어요 — ${out.note || ''}`);
+    if (out.status === 'ok') return toast(`${out.merchant} ${won(out.amount)} 넣었어요`);
+    return toast(out.message || '넣지 못했어요');
   }
 
   if (form.dataset.form === 'shifts') {

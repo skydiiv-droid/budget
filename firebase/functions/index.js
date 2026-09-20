@@ -12,7 +12,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { createHash } from 'node:crypto';
 
-import { parseMessage, normalizeMerchant } from './shared/parse.js';
+import { parseMessage, normalizeMerchant, splitMessages } from './shared/parse.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { ledger, monthSpending, sameSpanLastMonth, pace } from './shared/ledger.js';
 
@@ -72,88 +72,110 @@ export const ingest = onRequest(
         throw new HttpError(401, 'unauthorized', '토큰이 맞지 않아요');
       }
 
-      const body = String(payload.body || '').trim();
-      if (!body) return res.json({ status: 'ignored', reason: 'empty-body' });
+      const whole = String(payload.body || '').trim();
+      if (!whole) return res.json({ status: 'ignored', reason: 'empty-body' });
 
-      const uid = await ownerUid();
-      const root = db.collection('users').doc(uid);
-      const rawId = dedupeId(body);
-
-      // 이미 있는 문자면 아무것도 하지 않는다
-      const existing = await root.collection('raw').doc(rawId).get();
-      if (existing.exists) return res.json({ status: 'duplicate' });
-
-      const receivedAt = payload.receivedAt ? new Date(payload.receivedAt) : new Date();
-      const location = (payload.lat !== undefined && payload.lat !== null && payload.lat !== '')
-        ? { lat: Number(payload.lat), lon: Number(payload.lon) }
-        : null;
-
-      const [patterns, rules, merchants, recent] = await Promise.all([
-        root.collection('patterns').get().then(asArray),
-        root.collection('rules').get().then(asArray),
-        root.collection('merchants').get().then(asArray),
-        root.collection('txns').orderBy('occurredAt', 'desc').limit(400).get().then(asArray),
-      ]);
-
-      const parsed = parseMessage(body, payload.sender, receivedAt, patterns);
-
-      const raw = {
-        body,
-        sender: String(payload.sender || ''),
-        receivedAt: receivedAt.toISOString(),
-        parsedOk: parsed.ok,
-        parseNote: parsed.note,
-        txnId: null,
-        ingestedAt: FieldValue.serverTimestamp(),
-      };
-
-      if (parsed.kind === 'ad') {
-        await root.collection('raw').doc(rawId).set({ ...raw, parsedOk: true, parseNote: '광고' });
-        return res.json({ status: 'ignored', reason: 'ad' });
-      }
-      if (!parsed.ok) {
-        await root.collection('raw').doc(rawId).set(raw);
-        return res.json({ status: 'parse_failed', rawId, note: parsed.note });
+      // 며칠 놓친 문자를 한 건씩 공유하게 둘 수는 없다. 붙여 온 걸 갈라 처리한다.
+      const parts = splitMessages(whole);
+      if (parts.length > 1) {
+        const results = [];
+        for (const part of parts) {
+          results.push(await takeOne({ ...payload, body: part }));
+        }
+        return res.json({
+          status: 'batch',
+          count: results.length,
+          saved: results.filter((r) => r.status === 'ok').length,
+          duplicate: results.filter((r) => r.status === 'duplicate').length,
+          failed: results.filter((r) => r.status === 'parse_failed').length,
+          results,
+        });
       }
 
-      const decision = classify(parsed.merchantRaw, {
-        merchants, rules, transactions: recent, location,
-      });
-
-      const txnRef = root.collection('txns').doc();
-      const txn = buildTransaction(parsed, rawId, location, decision, txnRef.id);
-
-      const batch = db.batch();
-      batch.set(root.collection('raw').doc(rawId), { ...raw, txnId: txnRef.id });
-      batch.set(txnRef, txn);
-
-      for (const anchor of anchorsFrom(parsed)) {
-        batch.set(root.collection('anchors').doc(), { ...anchor, rawId });
-      }
-      await batch.commit();
-
-      const response = {
-        status: txn.categoryId ? 'categorized' : 'uncategorized',
-        txnId: txnRef.id,
-        merchant: parsed.merchantRaw || '(가맹점 미상)',
-        amount: parsed.amount,
-        type: txn.type,
-        categoryId: txn.categoryId,
-        reason: decision.reason,
-      };
-      if (!txn.categoryId && txn.type === 'expense') {
-        response.learnHint = suggestKeyword(parsed.merchantRaw, { rules, transactions: recent });
-      }
-      return res.json(response);
+      return res.json(await takeOne({ ...payload, body: parts[0] || whole }));
     } catch (err) {
-      if (err instanceof HttpError) {
-        return res.status(err.status).json({ status: 'error', reason: err.reason, message: err.message });
-      }
-      console.error(err);
-      return res.status(500).json({ status: 'error', reason: 'server', message: String(err.message || err) });
+      const status = err.status || 500;
+      res.status(status).json({ ok: false, reason: err.reason || 'error', message: err.message });
     }
   },
 );
+
+/** 문자 한 통을 받아 넣는다. 여러 통이 붙어 오면 위에서 갈라 한 통씩 부른다. */
+async function takeOne(payload) {
+  const body = String(payload.body || '').trim();
+  if (!body) return { status: 'ignored', reason: 'empty-body' };
+
+  const uid = await ownerUid();
+  const root = db.collection('users').doc(uid);
+  const rawId = dedupeId(body);
+
+  // 이미 있는 문자면 아무것도 하지 않는다
+  const existing = await root.collection('raw').doc(rawId).get();
+  if (existing.exists) return { status: 'duplicate' };
+
+  const receivedAt = payload.receivedAt ? new Date(payload.receivedAt) : new Date();
+  const location = (payload.lat !== undefined && payload.lat !== null && payload.lat !== '')
+    ? { lat: Number(payload.lat), lon: Number(payload.lon) }
+    : null;
+
+  const [patterns, rules, merchants, recent] = await Promise.all([
+    root.collection('patterns').get().then(asArray),
+    root.collection('rules').get().then(asArray),
+    root.collection('merchants').get().then(asArray),
+    root.collection('txns').orderBy('occurredAt', 'desc').limit(400).get().then(asArray),
+  ]);
+
+  const parsed = parseMessage(body, payload.sender, receivedAt, patterns);
+
+  const raw = {
+    body,
+    sender: String(payload.sender || ''),
+    receivedAt: receivedAt.toISOString(),
+    parsedOk: parsed.ok,
+    parseNote: parsed.note,
+    txnId: null,
+    ingestedAt: FieldValue.serverTimestamp(),
+  };
+
+  if (parsed.kind === 'ad') {
+    await root.collection('raw').doc(rawId).set({ ...raw, parsedOk: true, parseNote: '광고' });
+    return { status: 'ignored', reason: 'ad' };
+  }
+  if (!parsed.ok) {
+    await root.collection('raw').doc(rawId).set(raw);
+    return { status: 'parse_failed', rawId, note: parsed.note };
+  }
+
+  const decision = classify(parsed.merchantRaw, {
+    merchants, rules, transactions: recent, location,
+  });
+
+  const txnRef = root.collection('txns').doc();
+  const txn = buildTransaction(parsed, rawId, location, decision, txnRef.id);
+
+  const batch = db.batch();
+  batch.set(root.collection('raw').doc(rawId), { ...raw, txnId: txnRef.id });
+  batch.set(txnRef, txn);
+
+  for (const anchor of anchorsFrom(parsed)) {
+    batch.set(root.collection('anchors').doc(), { ...anchor, rawId });
+  }
+  await batch.commit();
+
+  const response = {
+    status: txn.categoryId ? 'categorized' : 'uncategorized',
+    txnId: txnRef.id,
+    merchant: parsed.merchantRaw || '(가맹점 미상)',
+    amount: parsed.amount,
+    type: txn.type,
+    categoryId: txn.categoryId,
+    reason: decision.reason,
+  };
+  if (!txn.categoryId && txn.type === 'expense') {
+    response.learnHint = suggestKeyword(parsed.merchantRaw, { rules, transactions: recent });
+  }
+  return { ...response, status: 'ok', kind: response.status };
+}
 
 function buildTransaction(parsed, rawId, location, decision, id) {
   const txn = {

@@ -15,15 +15,10 @@
  *   차이    32,900  ← 이만큼 어딘가 안 들어왔다
  */
 
+import { cardGroup, inCards, alive, isCard } from './accounts.js';
+
 const num = (v) => Number(v || 0);
 const monthOf = (iso) => String(iso || '').slice(0, 7);
-
-/** 같은 카드인가. accountId 가 붙기 전 거래는 이름으로 맞춘다. */
-const sameCard = (anchor, t, account) => {
-  if (account && t.accountId) return t.accountId === account.id;
-  if (anchor.cardName && t.cardName) return anchor.cardName === t.cardName;
-  return false;
-};
 
 /**
  * 카드 누적 대조.
@@ -37,27 +32,34 @@ const sameCard = (anchor, t, account) => {
 export function cardCheck(data = {}) {
   const { anchors = [], transactions = [], accounts = [] } = data;
 
-  // 카드마다 가장 최근 누적만 본다. 옛 앵커는 이미 지나간 얘기다.
+  // 누적은 카드 한 장이 아니라 **청구서 한 장** 기준이다. 현대카드는 카드가
+  // 둘이어도 합쳐 찍으므로, 묶인 카드를 다 더해야 맞는다.
+  const cardOf = (a) => accounts.find((x) => x.name === a.cardName)
+    || accounts.find((x) => alive(x) && isCard(x) && x.issuer === a.issuer);
+
   const latest = new Map();
   for (const a of anchors) {
     if (a.kind !== 'cumulative' || a.reported == null) continue;
-    const key = a.cardName || a.issuer || '';
+    const card = cardOf(a);
+    const key = card ? (card.statementGroupId || card.id) : (a.cardName || a.issuer || '');
     if (!key) continue;
     const cur = latest.get(key);
-    if (!cur || String(a.at) > String(cur.at)) latest.set(key, a);
+    if (!cur || String(a.at) > String(cur.anchor.at)) latest.set(key, { anchor: a, card });
   }
 
   const out = [];
-  for (const [key, anchor] of latest) {
-    const account = accounts.find((x) => x.name === key)
-      || accounts.find((x) => x.type === 'card' && x.issuer === anchor.issuer);
+  for (const [key, { anchor, card }] of latest) {
+    const account = card || null;
+    const group = account ? cardGroup(account, accounts) : [];
     const month = monthOf(anchor.at);
 
     const counted = transactions
       .filter((t) => t.type === 'expense' && t.status !== 'voided')
       .filter((t) => monthOf(t.occurredAt) === month)
       .filter((t) => String(t.occurredAt) <= String(anchor.at))
-      .filter((t) => sameCard(anchor, t, account))
+      .filter((t) => (group.length
+        ? inCards(t, group)
+        : (anchor.cardName && t.cardName === anchor.cardName)))
       .reduce((s, t) => s + num(t.amount), 0);
 
     const reported = num(anchor.reported);
@@ -65,7 +67,8 @@ export function cardCheck(data = {}) {
     out.push({
       key, month, at: anchor.at,
       accountId: account?.id || '',
-      name: account?.name || key,
+      accountIds: group.map((c) => c.id),
+      name: group.length > 1 ? group.map((c) => c.name).join(' + ') : (account?.name || anchor.cardName || key),
       reported, counted, gap,
       // 1원까지 맞기를 기대하지 않는다. 앵커보다 늦게 들어온 문자가 섞일 수 있다.
       missing: gap > 0 ? gap : 0,

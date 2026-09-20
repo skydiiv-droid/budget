@@ -37,8 +37,8 @@ test('금액을 찍는 자리마다 가릴 class 가 붙어 있다', () => {
     // 속성값에 들어가는 건 화면에 글자로 찍히지 않는다.
     // aria-label 은 읽어 주기용이라 눈에 안 보인다 — 어깨너머로 새지 않는다.
     if (/value="$|placeholder="$|data-[a-z]+="$|aria-label="[^"]*$/.test(before)) continue;
-    // fold() 가 넘겨받은 요약은 .fold-s 안에 들어가고, 그건 가려진다
-    if (/fold\('[a-z]+'/.test(before.slice(-160))) continue;
+    // fold()·group() 이 넘겨받은 요약은 .fold-s 안에 들어가고, 그건 가려진다
+    if (/(fold|group)\('[a-z_]+'/.test(before.slice(-160))) continue;
     // 토스트는 내가 방금 누른 것에 대한 대답이라 잠깐 뜨고 사라진다
     if (/toast\(`?[^`]*$/.test(before.slice(before.lastIndexOf('toast(')))
         && before.includes('toast(')) continue;

@@ -19,7 +19,7 @@ import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMon
   from './shared/ledger.js';
 import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf } from './shared/accounts.js';
 import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
-import { trend, categoryBudgets } from './shared/ledger.js';
+import { trend, categoryBudgets, monthlyFixed } from './shared/ledger.js';
 import { search, knownTags, parseTags } from './shared/search.js';
 import { toCSV } from './shared/csv.js';
 import { detectRecurring } from './shared/detect.js';
@@ -155,6 +155,7 @@ async function start() {
       await syncCategories();
       await migrateDebts();
       await fixSeededAccounts();
+      await migrateRevolving();
       await refresh();
     } catch (err) {
       screen(`<h1>열지 못했어요</h1>
@@ -250,6 +251,52 @@ async function syncCategories() {
  * seed 가 다시 돌지 않으므로 여기서 고친다. 쓰는 사람이 직접 고쳐 둔 값은
  * 건드리지 않는다 — 내가 틀렸다고 남의 답까지 지울 이유는 없다.
  */
+/**
+ * 리볼빙을 따로 빌린 돈으로 두던 걸 카드 속성으로 옮긴다.
+ *
+ * 리볼빙은 대출이 아니라 카드의 성질이다. 따로 두면 청구액을 셀 때 이월분을
+ * 어디서 가져와야 할지가 매번 애매하고, 약정비율을 걸 데가 없다.
+ */
+async function migrateRevolving() {
+  const all = await readAll('accounts');
+  const cards = all.filter((c) => c.type === 'card' && c.active !== false);
+
+  // 엮어 둔 카드가 있으면 그걸 쓰고, 없으면 이름으로 찾는다.
+  // "현대카드 리볼빙" 은 발급사 이름을 품고 있다.
+  const cardFor = (loan) => {
+    const byLink = cards.find((c) => c.id === loan.linkedAccountId);
+    if (byLink) return byLink;
+    const name = String(loan.name || '');
+    if (!/리볼빙/.test(name)) return null;
+    return cards.find((c) => c.issuer && name.includes(c.issuer))
+      || cards.find((c) => name.includes(String(c.name || '').split(/\s/)[0]))
+      || null;
+  };
+
+  const pairs = all
+    .filter((a) => a.type === 'loan')
+    .map((loan) => [loan, cardFor(loan)])
+    .filter(([, card]) => card);
+  if (!pairs.length) return;
+
+  const ops = [];
+  for (const [loan, card] of pairs) {
+    ops.push((b) => b.set(doc(col('accounts'), card.id), {
+      revolving: true,
+      revolvingBalance: Math.abs(Number(loan.balance) || 0),
+      revolvingRate: Number(loan.rate) || 0,
+      // 약정비율은 카드사 앱에서 정하는 값이라 모른다. 전액 결제로 두고
+      // 사용자가 고치게 한다 — 모르는 값을 지어내면 청구액이 조용히 틀린다.
+      // 약정비율은 카드사 앱에서 정하는 값이라 모른다. 이미 정해 둔 게 있으면
+      // 그걸 두고, 없을 때만 전액 결제로 둔다 — 모르는 값을 지어내면 청구액이
+      // 조용히 틀린다.
+      revolvingRatio: Number(card.revolvingRatio) || 100,
+    }, { merge: true }));
+    ops.push((b) => b.delete(doc(col('accounts'), loan.id)));
+  }
+  await commitAll(ops);
+}
+
 async function fixSeededAccounts() {
   const metaRef = doc(db, 'users', uid, 'meta', 'settings');
   const meta = await getDoc(metaRef);
@@ -367,6 +414,7 @@ function render() {
   renderFixed();
   renderSetup();
   syncAccountForm();
+  syncRecurringForm();
   syncGoalForm();
   renderTagList();
 }
@@ -427,19 +475,21 @@ function renderHome() {
   const spentTotal = sumCounted(spent);
   const prev = sameSpanLastMonth(histData(), D.ledger.month);
   const run = pace(spentTotal, D.ledger.month, D.settings.cycleStartDay);
-  let h = '';
+  let h = renderGap();
 
   // ── 이번 달 ────────────────────────────────────────────
   h += `<div class="card">
     <div class="row"><span class="lbl grow">이 달에 쓴 돈</span>
       <span class="muted">${run.dayOf}/${run.days}일</span></div>
-    <div class="big num" style="font-size:38px;color:var(--spend);margin:10px 0 ${budget.limit ? 12 : 8}px">₩${won(spentTotal)}</div>`;
+    <div class="big num" style="font-size:38px;margin:10px 0 ${budget.limit ? 12 : 8}px">₩${won(spentTotal)}</div>`;
 
   if (budget.limit) {
-    h += `<div class="bar"><i style="width:${Math.min(100, budget.usedPct)}%;background:var(--spend)"></i></div>
+    h += `<div class="bar"><i style="width:${Math.min(100, budget.usedPct)}%;background:${
+      budget.usedPct > 100 ? 'var(--warn-mark)' : 'var(--blue)'}"></i></div>
       <div class="row" style="margin-top:9px">
         <span class="grow" style="font-size:13px;color:var(--ink2)">오늘 쓸 수 있는 돈</span>
-        <span class="num" style="font-size:19px;font-weight:700;color:var(--blue)">₩${won(budget.perDay)}</span></div>
+        <span class="num" style="font-size:19px;font-weight:700;color:${
+          budget.perDay > 0 ? 'var(--up)' : 'var(--warn-mark)'}">₩${won(budget.perDay)}</span></div>
       <div class="muted">예산 ₩<span class="num">${won(budget.limit)}</span> 중 ${budget.usedPct}% · 남은 ${budget.daysLeft}일</div>`;
   }
 
@@ -461,20 +511,7 @@ function renderHome() {
       어디에 썼는지 보기 →</button></div>`;
 
   // ── 다음 카드값 ─────────────────────────────────────────
-  if (cards.total) {
-    h += `<div class="card">
-      <div class="row"><span class="lbl grow">다음 카드값</span>
-        <span class="muted">${cards.items[0].daysLeft}일 뒤</span></div>
-      <div class="big num" style="font-size:30px;color:var(--spend);margin:10px 0 12px">₩${won(cards.total)}</div>`;
-    for (const b of cards.items) {
-      h += `<div class="row" style="padding:6px 0">
-        <span class="grow"><span style="font-size:13px;font-weight:600">${esc(b.name)}</span><br>
-          <span class="muted">${dateLabel(b.payAt)} 출금${b.shifted ? ' (쉬는 날이라 밀림)' : ''}${
-            b.carried ? ` · 리볼빙 <span class="num">${won(b.carried)}</span> 포함` : ''}</span></span>
-        <span class="num" style="font-size:14px;font-weight:600">${won(b.total)}</span></div>`;
-    }
-    h += `<div class="muted" style="margin-top:8px">${esc(dateLabel(cards.items[0].from))} 이후 긁은 것부터 셉니다.</div></div>`;
-  }
+  if (cards.total) h += renderBills(cards);
 
   // ── 목표 ───────────────────────────────────────────────
   h += renderGoal(goal, debt, planned);
@@ -483,29 +520,29 @@ function renderHome() {
   if (assets.total || debt.total) {
     h += `<div class="card">
       <div class="row"><span class="lbl grow">순자산</span><span class="muted">가진 돈 − 빚</span></div>
-      <div class="big num" style="font-size:28px;margin:9px 0 12px;color:${assets.net >= 0 ? 'var(--ink)' : 'var(--spend)'}">
+      <div class="big num" style="font-size:28px;margin:9px 0 12px;color:${assets.net >= 0 ? 'var(--ink)' : 'var(--down)'}">
         ${assets.net < 0 ? '−₩' + won(-assets.net) : '₩' + won(assets.net)}</div>`;
     assets.items.filter((a) => a.balance).forEach((a) => {
       h += `<div class="row" style="padding:5px 0">
         <span class="grow" style="font-size:13px;color:var(--ink2)">${esc(a.name)}</span>
-        <span class="num" style="font-size:13.5px;font-weight:600;color:var(--blue)">${won(a.balance)}</span></div>`;
+        <span class="num" style="font-size:13.5px;font-weight:600;color:var(--up)">${won(a.balance)}</span></div>`;
     });
     if (debt.total) {
       h += `<div class="row" style="padding:5px 0">
         <span class="grow" style="font-size:13px;color:var(--ink2)">빚</span>
-        <span class="num" style="font-size:13.5px;font-weight:600;color:var(--spend)">− ${won(debt.total)}</span></div>`;
+        <span class="num" style="font-size:13.5px;font-weight:600;color:var(--down)">− ${won(debt.total)}</span></div>`;
     }
     h += '</div>';
   }
 
   // ── 이번 달 계산 ────────────────────────────────────────
   h += `<div class="card"><div class="lbl" style="margin-bottom:11px">이번 달 계산</div>
-    ${flowRow('수입', planned.income, 'var(--blue)', '+')}
-    ${flowRow('고정비', planned.fixed, 'var(--spend)', '−')}
-    ${flowRow('생활비 예산', planned.variableBudget, 'var(--spend)', '−')}
+    ${flowRow('수입', planned.income, 'var(--up)', '+')}
+    ${flowRow('고정비', planned.fixed, 'var(--down)', '−')}
+    ${flowRow('생활비 예산', planned.variableBudget, 'var(--down)', '−')}
     <div class="hr"></div>
     <div class="row"><span class="grow" style="font-size:14px;font-weight:600">남는 돈</span>
-      <span class="big num" style="font-size:22px;color:${planned.available >= 0 ? 'var(--blue)' : 'var(--spend)'}">${won(planned.available)}</span>
+      <span class="big num" style="font-size:22px;color:${planned.available >= 0 ? 'var(--up)' : 'var(--down)'}">${won(planned.available)}</span>
     </div></div>`;
 
   const waiting = inbox.pending + inbox.unparsed + openCancels(D.txns).length;
@@ -516,6 +553,77 @@ function renderHome() {
   }
 
   $('home').innerHTML = h;
+}
+
+/**
+ * 맞지 않는 게 있으면 맨 위에 띄운다.
+ *
+ * 한두 번은 별것 아니지만 쌓이면 합계가 통째로 틀어진다. 정리 탭에 두면
+ * 거기까지 가야 알게 되는데, 그때는 이미 몇 주가 지나 있다.
+ */
+function renderGap() {
+  const cards = cardCheck({ anchors: D.anchors, transactions: D.txns, accounts: D.accounts })
+    .filter((c) => !c.ok);
+  const banks = balanceCheck({ anchors: D.anchors, accounts: D.accounts })
+    .filter((b) => b.stale && !b.ok);
+  if (!cards.length && !banks.length) return '';
+
+  const total = cards.reduce((s, c) => s + Math.abs(c.gap), 0);
+  const what = [
+    cards.length ? `카드 ${cards.length}건` : '',
+    banks.length ? `통장 ${banks.length}건` : '',
+  ].filter(Boolean).join(' · ');
+
+  return `<button type="button" class="note warn" style="margin-bottom:12px" data-tab="inbox">
+    <b>문자에 찍힌 숫자와 안 맞아요</b> — ${what}${
+      total ? `, 카드 쪽은 <b class="num">${won(total)}</b> 차이` : ''}<br>
+    한두 번은 별것 아니지만 쌓이면 합계가 통째로 틀어져요.
+    <span style="text-decoration:underline">맞추러 가기</span></button>`;
+}
+
+/**
+ * 다음 결제일에 얼마 나가나.
+ *
+ * 리볼빙이 걸려 있으면 "얼마 내나"만으로는 반쪽이다. 적게 내는 만큼 다음 달로
+ * 넘어가고 거기에 이자가 붙는데, 그게 안 보이면 리볼빙이 싸 보인다.
+ * 청구 대상 → 이번에 낼 돈 → 넘어갈 돈을 다 펴서 보여 준다.
+ */
+function renderBills(cards) {
+  const lead = cards.items[0];
+  let h = `<div class="card">
+    <div class="row"><span class="lbl grow">다음 카드값</span>
+      <span class="muted">${lead.daysLeft}일 뒤</span></div>
+    <div class="big num" style="font-size:30px;color:var(--down);margin:10px 0 4px">₩${won(cards.total)}</div>
+    <div class="muted" style="margin-bottom:12px">${esc(dateLabel(lead.payAt))} 출금${
+      lead.shifted ? ' — 결제일이 쉬는 날이라 밀렸어요' : ''}</div>`;
+
+  for (const b of cards.items) {
+    h += `<div class="hr"></div>
+      <div class="row" style="padding:2px 0 8px">
+        <span class="grow" style="font-size:13px;font-weight:600">${esc(b.name)}</span>
+        <span class="muted">${Number(b.month.split('-')[1])}월치</span></div>`;
+
+    const line = (label, value, strong) => `<div class="row" style="padding:4px 0">
+      <span class="grow" style="font-size:12.5px;color:var(--ink2)${strong ? ';font-weight:700' : ''}">${label}</span>
+      <span class="num" style="font-size:13px;font-weight:${strong ? 700 : 600}">${won(value)}</span></div>`;
+
+    if (!b.revolving) {
+      h += line(`${b.open ? '지금까지' : '그 달에'} 쓴 돈`, b.usage, true);
+      continue;
+    }
+    h += line(`${b.open ? '지금까지' : '그 달에'} 쓴 돈`, b.usage);
+    if (b.carried) h += line('넘어온 이월잔액', b.carried);
+    h += line('청구 대상', b.billed);
+    h += line(`이번에 낼 돈 (${b.ratio}%)`, b.total, true);
+    h += `<div class="note warn" style="margin:10px 0 2px">
+      나머지 <b class="num">${won(b.carryOut)}</b>은 다음 달로 넘어가요${
+        b.interest ? `, 이자 <b class="num">${won(b.interest)}</b>이 붙어서` : ''}.
+      적게 낼수록 다음 달이 무거워집니다.</div>`;
+  }
+
+  h += `<div class="muted" style="margin-top:10px">청구 대상은 <b>그 달 1일부터 말일까지</b> 쓴
+    금액이에요. ${lead.open ? '이 달이 아직 안 끝나서 계속 늘어납니다.' : ''}</div></div>`;
+  return h;
 }
 
 const GOAL_WORD = {
@@ -545,7 +653,7 @@ function renderGoal(goal, debt, planned) {
 
   h += `<div class="row" style="margin:10px 0 12px">
       <span class="grow" style="font-size:12.5px;color:var(--ink2)">${w.left}</span>
-      <span class="big num" style="font-size:30px;color:${goal.kind === 'payoff' ? 'var(--spend)' : 'var(--blue)'}">₩${won(goal.remaining)}</span></div>
+      <span class="big num" style="font-size:30px;color:${goal.kind === 'payoff' ? 'var(--down)' : 'var(--up)'}">₩${won(goal.remaining)}</span></div>
     <div class="bar"><i style="width:${Math.min(100, Math.max(2, goal.pct))}%;background:var(--blue)"></i></div>
     <div class="muted" style="margin-top:7px">
       <b style="color:var(--blue)">${goal.pct}% ${w.verb}</b> · 시작 ₩<span class="num">${won(goal.start)}</span>${
@@ -555,7 +663,7 @@ function renderGoal(goal, debt, planned) {
     h += '<div class="hr"></div>';
     debt.items.forEach((d, i) => {
       h += `<div class="row" style="padding:7px 0">
-        <span style="width:3px;height:26px;border-radius:2px;background:${i === 0 ? 'var(--spend)' : '#CBD5E1'}"></span>
+        <span style="width:3px;height:26px;border-radius:2px;background:${i === 0 ? 'var(--down)' : '#CBD5E1'}"></span>
         <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(d.name)}</span><br>
           <span class="muted">연 ${Number(d.rate) || 0}%${i === 0 && debt.items.length > 1 ? ' · 먼저 갚기' : ''}</span></span>
         <span class="num" style="font-size:15px;font-weight:600">${won(d.amount)}</span></div>`;
@@ -680,7 +788,7 @@ function renderHistory() {
   if (prev.total > 0) {
     const pct = Math.round(((total - prev.total) / prev.total) * 100);
     const span = prev.whole ? '지난달' : `지난달 같은 기간`;
-    diff = ` · ${span}(₩<span class="num">${won(prev.total)}</span>)보다 <b class="num" style="color:${pct > 0 ? 'var(--spend)' : 'var(--blue)'}">`
+    diff = ` · ${span}(₩<span class="num">${won(prev.total)}</span>)보다 <b class="num" style="color:${pct > 0 ? 'var(--warn-mark)' : 'var(--ink3)'}">`
          + `${pct > 0 ? '+' : pct < 0 ? '−' : '±'}${Math.abs(pct)}%</b>`;
   }
 
@@ -695,7 +803,7 @@ function renderHistory() {
     </div>
     <div class="hr"></div>
     <div class="lbl">이 달에 쓴 돈</div>
-    <div class="big num" style="font-size:40px;color:var(--spend);margin:10px 0 7px">₩${won(total)}</div>
+    <div class="big num" style="font-size:40px;margin:10px 0 7px">₩${won(total)}</div>
     <div class="muted">${rows.length}건${diff}</div>
   </div>`;
 
@@ -731,10 +839,10 @@ function renderHistory() {
         <span class="bar"><i style="width:${cap?.limit
           ? Math.min(100, Math.max(3, cap.pct))
           : Math.max(3, Math.round((it.amount / top) * 100))}%;background:${
-          cap?.over ? 'var(--spend)' : 'var(--blue)'}"></i></span>
+          cap?.over ? 'var(--warn-mark)' : 'var(--blue)'}"></i></span>
       </span>
       <span class="brk-amt num">${won(it.amount)}<br><span class="muted"${
-        cap?.over ? ' style="color:var(--spend);font-weight:700"' : ''}>${
+        cap?.over ? ' style="color:var(--warn-mark);font-weight:700"' : ''}>${
         /* 한 칸에 두 뜻을 섞으면 안 된다 — 43% 가 예산의 43% 인지 전체의 43% 인지
            알 길이 없다. 막대가 무엇에 견준 것인지 글자로 말해 준다. */''}${
         cap?.limit ? `${cap.over ? '예산 넘음' : `예산 ${cap.pct}%`}` : `비중 ${it.pct}%`}</span></span>
@@ -1106,7 +1214,7 @@ function renderCheck() {
       <div class="hr"></div>
       <div class="row">
         <span class="grow" style="font-size:13.5px;font-weight:600">${c.missing ? '안 들어온 결제' : '더 들어온 결제'}</span>
-        <span class="big num" style="font-size:22px;color:var(--spend)">${won(Math.abs(c.gap))}</span></div>
+        <span class="big num" style="font-size:22px;color:var(--warn-mark)">${won(Math.abs(c.gap))}</span></div>
       <div class="note ${c.missing ? 'warn' : 'ok'}" style="margin:13px 0 0">${c.missing
         ? `문자가 안 온 결제가 <b class="num">${won(c.missing)}</b>어치 있어요.
            위에서 그 문자를 붙여 넣으면 채워집니다.`
@@ -1205,11 +1313,15 @@ function scopeOptions(merchantRaw, hint) {
 
 function renderFixed() {
   const list = [...D.recurring].sort((a, b) => (a.dayOfMonth || 0) - (b.dayOfMonth || 0));
-  const total = list.reduce((s, r) => s + Number(r.expectedAmount || 0), 0);
+  // 연 1회짜리는 열두 달로 나눠 얹는다. 나가는 달에만 세면 나머지 열한 달은
+  // 돈이 있는 줄 안다.
+  const total = monthlyFixed(list);
 
-  let h = `<div class="card"><div class="lbl">매달 빠져나가는 돈</div>
-    <div class="big num" style="font-size:34px;margin:9px 0 6px">₩${won(total)}</div>
-    <div class="muted">1년이면 <b class="num" style="color:var(--spend)">₩${won(total * 12)}</b></div></div>`;
+  const yearly = list.filter((r) => r.period === 'yearly');
+  let h = `<div class="card"><div class="lbl">한 달에 나가는 돈</div>
+    <div class="big num" style="font-size:34px;margin:9px 0 6px">₩${won(Math.round(total))}</div>
+    <div class="muted">1년이면 <b class="num" style="color:var(--down)">₩${won(Math.round(total * 12))}</b>${
+      yearly.length ? ` · 연 1회 ${yearly.length}건을 열두 달로 나눠 넣었어요` : ''}</div></div>`;
 
   h += '<div class="card">';
   if (!list.length) {
@@ -1217,8 +1329,12 @@ function renderFixed() {
   } else {
     for (const r of list) {
       h += `<div class="item">
-        <span class="muted num" style="width:34px">${r.dayOfMonth ? r.dayOfMonth + '일' : '—'}</span>
-        <span class="grow" style="font-size:13.5px;font-weight:500">${esc(r.name)}</span>
+        <span class="muted num" style="width:34px">${r.period === 'yearly'
+          ? `${r.monthOfYear || 1}월` : (r.dayOfMonth ? r.dayOfMonth + '일' : '—')}</span>
+        <span class="grow"><span style="font-size:13.5px;font-weight:500">${esc(r.name)}</span>${
+          r.period === 'yearly'
+            ? `<br><span class="muted">해마다 · 한 달로 치면 <span class="num">${won(Math.round(r.expectedAmount / 12))}</span></span>`
+            : ''}</span>
         <span class="num" style="font-size:13.5px;font-weight:600">${won(r.expectedAmount)}</span>
         <span class="acts">
           <button type="button" class="act ghost small" data-edit="recurring:${r.id}">고치기</button>
@@ -1232,8 +1348,19 @@ function renderFixed() {
     <input type="hidden" name="id">
     <div class="field"><label>이름</label><input name="name" placeholder="넷플릭스" required></div>
     <div class="fields">
+      <div class="field"><label>얼마나 자주</label>
+        <select name="period">
+          <option value="monthly">달마다</option>
+          <option value="yearly">해마다 (연 1회)</option></select></div>
+      <div class="field" data-rwhen="yearly"><label>몇 월</label>
+        <select name="monthOfYear">${Array.from({ length: 12 }, (_, i) =>
+          `<option value="${i + 1}">${i + 1}월</option>`).join('')}</select></div></div>
+    <div class="fields">
       <div class="field"><label>금액</label><input name="expectedAmount" inputmode="numeric" placeholder="17,000" required></div>
       <div class="field"><label>결제일</label><input name="dayOfMonth" inputmode="numeric" placeholder="5"></div></div>
+    <div class="muted" data-rwhen="yearly" style="margin:-4px 0 12px">
+      연 1회짜리는 <b>열두 달로 나눠</b> 여력 계산에 넣어요. 나가는 달에만 세면
+      나머지 열한 달은 돈이 있는 줄 압니다.</div>
     <div class="field"><label>카테고리</label>
       <select name="categoryId">${catOptions()}</select></div>
     <button type="submit" class="act primary" style="width:100%">추가</button></form>`;
@@ -1316,6 +1443,8 @@ function renderSetup() {
   const bankOptions = all.filter((a) => a.type === 'checking')
     .map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   const cardOptions = cardRows.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  const groupOptions = all.filter((a) => a.type === 'card' || a.type === 'checking')
+    .map((a) => `<option value="${a.id}">${esc(a.name)} 와 함께</option>`).join('');
 
   const form = `<form data-form="accounts">
     <input type="hidden" name="id">
@@ -1332,11 +1461,16 @@ function renderSetup() {
     <div class="fields" data-when="checking savings cash loan">
       <div class="field"><label>잔액</label>
         <input name="balance" inputmode="numeric" placeholder="500,000"></div>
-      <div class="field" data-when="checking loan"><label>이자율 (연 %)</label>
-        <input name="rate" inputmode="decimal" placeholder="19.9"></div></div>
+      <div class="field" data-when="checking loan">
+        <label id="rateLabel">이자율 (연 %)</label>
+        <input name="rate" inputmode="decimal" placeholder="19.9"></div>
+      <div class="field" data-when="checking"><label>플러스일 때 (연 %)</label>
+        <input name="ratePlus" inputmode="decimal" placeholder="0.1"></div></div>
     <label class="check" data-when="checking" style="margin:-2px 0 12px">
       <input type="checkbox" name="isMinus">
-      <span>지금 마이너스예요 — 그만큼이 빚으로 잡힙니다 (마이너스통장)</span></label>
+      <span>지금 마이너스예요 — 그만큼이 빚으로 잡힙니다</span></label>
+    <div class="muted" data-when="checking" style="margin:-4px 0 12px">
+      마통이라고 늘 마이너스인 건 아니죠. 플러스일 땐 이자를 받으니 둘 다 넣을 수 있어요.</div>
 
     <div class="fields" data-when="card">
       <div class="field"><label>카드 종류</label>
@@ -1348,9 +1482,26 @@ function renderSetup() {
         <input name="billingDay" inputmode="numeric" placeholder="10"></div></div>
     <div class="field" data-when="card"><label>어느 통장에서 빠지나요</label>
       <select name="payFromId"><option value="">안 정함</option>${bankOptions}</select></div>
-    <div class="field" data-when="loan"><label>어느 카드에서 넘어온 건가요</label>
-      <select name="linkedAccountId"><option value="">카드와 상관없음</option>${cardOptions}</select>
-      <div class="muted" style="margin-top:6px">리볼빙이면 그 카드를 골라 주세요. 다음 결제일 청구액에 함께 잡힙니다.</div></div>
+    <div class="field" data-when="card"><label>청구서를 함께 쓰는 카드</label>
+      <select name="statementWith"><option value="">따로 청구돼요</option>${groupOptions}</select>
+      <div class="muted" style="margin-top:6px">현대카드는 카드가 둘이어도 <b>누적을 합쳐</b> 찍어요.
+        묶어 두면 청구서 한 장으로 세고 대조도 맞습니다. 체크카드와 통장도 마찬가지예요.</div></div>
+
+    <label class="check" data-when="card" style="margin:0 0 12px">
+      <input type="checkbox" name="revolving">
+      <span>리볼빙을 쓰고 있어요</span></label>
+    <div class="fields" data-when="card revolving">
+      <div class="field"><label>이번 달 결제 비율 (%)</label>
+        <input name="revolvingRatio" inputmode="numeric" placeholder="30"></div>
+      <div class="field"><label>리볼빙 이자율 (연 %)</label>
+        <input name="revolvingRate" inputmode="decimal" placeholder="19.9"></div></div>
+    <div class="field" data-when="card revolving"><label>지금 이월돼 있는 금액</label>
+      <input name="revolvingBalance" inputmode="numeric" placeholder="2,180,000">
+      <div class="muted" style="margin-top:6px">카드사 앱에 적힌 <b>이월잔액</b>이에요.
+        카드사가 정하는 숫자라 앱이 셀 수 없어서 직접 넣어야 해요. 이만큼이 빚으로 잡힙니다.</div></div>
+
+    <div class="field" data-when="loan"><label>무엇과 엮인 빚인가요</label>
+      <select name="linkedAccountId"><option value="">엮인 데 없음</option>${cardOptions}</select></div>
 
     <button type="submit" class="act primary" style="width:100%">저장</button>
     <div class="muted" style="margin-top:10px">위 목록에서 <b>고치기</b> 를 누르면 여기로 불러와요.</div></form>`;
@@ -1393,33 +1544,58 @@ function renderSetup() {
     </div>`;
 
   const cats = expenseCats();
+  const net = D.ledger.assets.net;
+
+  // 설정은 한 벌로 늘어놓으면 열한 칸이라 찾을 수가 없다. 큰 갈래로 한 번 묶는다.
   $('setup').innerHTML = [
-    fold('goal', '목표',
-      goalSummary(), goalForm()),
-    fold('income', '수입과 예산',
-      s.monthlyIncome ? `들어옴 ${won(s.monthlyIncome)} · 생활비 ${won(s.variableBudget)}` : '아직 안 넣음', income),
-    fold('assets', '가진 돈',
-      cashRows.length ? `${cashRows.length}개 · ${won(D.ledger.assets.total)}` : '없음', money),
-    fold('debts', '빚',
-      debtRows.length ? `${debtRows.length}개 · ${won(D.ledger.debt.total)}` : '없음', debts),
-    fold('cards', '카드',
-      cardRows.length ? `${cardRows.length}장` : '없음', cards),
-    fold('add', '계좌 · 카드 · 빚 넣기', '한 군데서 다 넣어요', form),
-    fold('shifts', '근무표',
-      Object.keys(D.shifts).length ? `${Object.keys(D.shifts).length}일 넣음` : '안 넣음',
-      renderShiftForm()),
-    fold('catbudget', '갈래별 예산',
-      D.ledger.byCategory.withLimit.length
-        ? `${D.ledger.byCategory.withLimit.length}개 · ${won(D.ledger.byCategory.limitTotal)}`
-        : '안 잡음', renderCategoryBudgets()),
-    fold('cats', '카테고리',
-      `큰 갈래 ${cats.filter((c) => !c.parentId).length} · 하위 ${cats.filter((c) => c.parentId).length}`,
-      renderCategories()),
-    fold('rules', '자동 분류 규칙',
-      `내가 정한 것 ${mine}개`, renderRules()),
-    fold('ingest', '문자 연결', '단축어가 문자를 보내는 곳', ingest),
-    fold('etc', '그 밖에', '', etc),
+    group('money', '돈', `순자산 ${net < 0 ? '−' : ''}${won(Math.abs(net))}`, [
+      fold('assets', '가진 돈',
+        cashRows.length ? `${cashRows.length}개 · ${won(D.ledger.assets.total)}` : '없음', money),
+      fold('debts', '빚',
+        debtRows.length ? `${debtRows.length}개 · ${won(D.ledger.debt.total)}` : '없음', debts),
+      fold('cards', '카드',
+        cardRows.length ? `${cardRows.length}장` : '없음', cards),
+      fold('add', '계좌 · 카드 · 빚 넣기', '한 군데서 다 넣어요', form),
+    ]),
+    group('plan', '계획', s.monthlyIncome ? `매달 ${won(s.monthlyIncome)}` : '아직 안 잡음', [
+      fold('goal', '목표', goalSummary(), goalForm()),
+      fold('income', '수입과 예산',
+        s.monthlyIncome ? `들어옴 ${won(s.monthlyIncome)} · 생활비 ${won(s.variableBudget)}` : '아직 안 넣음', income),
+      fold('catbudget', '갈래별 예산',
+        D.ledger.byCategory.withLimit.length
+          ? `${D.ledger.byCategory.withLimit.length}개 · ${won(D.ledger.byCategory.limitTotal)}`
+          : '안 잡음', renderCategoryBudgets()),
+    ]),
+    group('sort', '분류', `카테고리 ${cats.length} · 내 규칙 ${mine}`, [
+      fold('cats', '카테고리',
+        `큰 갈래 ${cats.filter((c) => !c.parentId).length} · 하위 ${cats.filter((c) => c.parentId).length}`,
+        renderCategories()),
+      fold('rules', '자동 분류 규칙', `내가 정한 것 ${mine}개`, renderRules()),
+    ]),
+    group('me', '나', Object.keys(D.shifts).length ? `근무표 ${Object.keys(D.shifts).length}일` : '', [
+      fold('shifts', '근무표',
+        Object.keys(D.shifts).length ? `${Object.keys(D.shifts).length}일 넣음` : '안 넣음',
+        renderShiftForm()),
+    ]),
+    group('link', '연결', '문자 · 위젯', [
+      fold('ingest', '문자 연결', '단축어가 문자를 보내는 곳', ingest),
+    ]),
+    group('etcg', '그 밖에', '', [
+      fold('etc', '내보내기 · 로그아웃', '', etc),
+    ]),
   ].join('');
+}
+
+/**
+ * 설정의 큰 갈래.
+ *
+ * 접힌 칸이 열한 개면 그것대로 못 찾는다. 한 겹 더 묶어 네댓 개로 줄인다.
+ */
+function group(key, title, summary, inner) {
+  return `<details class="grp" data-fold="g_${key}" ${openFold.has(`g_${key}`) ? 'open' : ''}>
+    <summary><span class="grp-t">${esc(title)}</span>
+      <span class="fold-s">${esc(summary)}</span><span class="fold-x"></span></summary>
+    <div class="grp-b">${inner.join('')}</div></details>`;
 }
 
 /**
@@ -1491,12 +1667,30 @@ function syncQuick() {
 }
 
 /** 통장에 결제일이 있을 리 없고 카드에 이자율이 있을 리 없다. 쓰는 칸만 보인다. */
+/** 달마다 나가는 건 "몇 월"을 물을 이유가 없다. */
+function syncRecurringForm() {
+  const form = document.querySelector('[data-form="recurring"]');
+  const period = form?.elements?.period?.value;
+  if (!period) return;
+  for (const el of form.querySelectorAll('[data-rwhen]')) {
+    el.hidden = el.dataset.rwhen !== period;
+  }
+}
+
 function syncAccountForm() {
   const form = document.querySelector('[data-form="accounts"]');
   const type = form?.elements?.type?.value;
   if (!type) return;
+  const revolving = form.elements.revolving?.checked === true;
+  const rateLabel = form.querySelector('#rateLabel');
+  if (rateLabel) {
+    rateLabel.textContent = type === 'checking' ? '마이너스일 때 (연 %)' : '이자율 (연 %)';
+  }
   for (const el of form.querySelectorAll('[data-when]')) {
-    el.hidden = !el.dataset.when.split(' ').includes(type);
+    const want = el.dataset.when.split(' ');
+    // "card revolving" 처럼 둘을 함께 적으면 둘 다 맞아야 보인다
+    el.hidden = !want.includes(type)
+      || (want.includes('revolving') && !revolving);
   }
 }
 
@@ -1627,7 +1821,7 @@ function renderCategoryBudgets() {
     <div class="row" style="margin-bottom:12px">
       <span class="grow" style="font-size:13px;font-weight:600">잡은 예산 합</span>
       <span class="num" style="font-size:14px;font-weight:700;color:${
-        total && sum > total ? 'var(--spend)' : 'var(--ink)'}">${won(sum)}</span></div>
+        total && sum > total ? 'var(--warn-mark)' : 'var(--ink)'}">${won(sum)}</span></div>
     ${total ? `<div class="muted" style="margin:-6px 0 12px">생활비 예산은 <span class="num">${won(total)}</span>이에요${
       sum > total ? ' — 갈래별로 잡은 게 더 많아요.' : '.'}</div>` : ''}
     <button type="submit" class="act primary" style="width:100%">저장</button></form>`;
@@ -1851,6 +2045,13 @@ async function saveDoc(kind, values) {
     const ref = existing ? doc(col('accounts'), existing.id) : doc(col('accounts'));
     const amount = parseAmount(values.balance) || 0;
 
+    // 청구서를 함께 쓰기로 한 상대의 묶음에 들어간다. 상대가 아직 혼자면
+    // 상대의 id 가 곧 묶음 이름이 된다.
+    const mate = D.accounts.find((a) => a.id === values.statementWith);
+    const groupId = type === 'card'
+      ? (mate ? (mate.statementGroupId || mate.id) : '')
+      : (existing?.statementGroupId || '');
+
     await setDoc(ref, {
       id: ref.id, name, type,
       // 카드는 잔액을 쓰지 않는다 — 얼마 나갈지는 거래에서 센다.
@@ -1860,12 +2061,27 @@ async function saveDoc(kind, values) {
         : (type === 'loan' ? Math.abs(amount)
         : (type === 'checking' && values.isMinus === true ? -Math.abs(amount) : Math.abs(amount))),
       rate: Number(values.rate) || 0,
+      // 마통이라고 늘 마이너스인 건 아니다. 플러스일 때 받는 이자는 따로 둔다.
+      ratePlus: type === 'checking' ? (Number(values.ratePlus) || 0) : 0,
       cardType: type === 'card' ? (values.cardType || 'credit') : '',
       billingDay: Number(values.billingDay) || null,
       payFromId: type === 'card' ? (values.payFromId || '') : '',
+      statementGroupId: groupId,
+      // 리볼빙은 따로 빌린 돈이 아니라 카드의 성질이다
+      revolving: type === 'card' && values.revolving === true,
+      revolvingRatio: type === 'card'
+        ? Math.min(100, Math.max(1, Number(values.revolvingRatio) || 100)) : 0,
+      revolvingRate: type === 'card' ? (Number(values.revolvingRate) || 0) : 0,
+      revolvingBalance: type === 'card' && values.revolving === true
+        ? Math.abs(parseAmount(values.revolvingBalance) || 0) : 0,
       linkedAccountId: type === 'loan' ? (values.linkedAccountId || '') : '',
       balanceAt: new Date().toISOString(), active: true,
     }, { merge: true });
+
+    // 묶음은 양쪽이 같은 이름을 들고 있어야 한다
+    if (mate && groupId && !mate.statementGroupId) {
+      await updateDoc(doc(col('accounts'), mate.id), { statementGroupId: groupId });
+    }
 
   } else if (kind === 'categories') {
     const parentId = values.parentId || '';
@@ -1891,8 +2107,10 @@ async function saveDoc(kind, values) {
   } else if (kind === 'recurring') {
     const existing = D.recurring.find((r) => r.id === values.id);
     const ref = existing ? doc(col('recurring'), existing.id) : doc(col('recurring'));
+    const period = values.period === 'yearly' ? 'yearly' : 'monthly';
     await setDoc(ref, {
-      id: ref.id, name,
+      id: ref.id, name, period,
+      monthOfYear: period === 'yearly' ? (Number(values.monthOfYear) || 1) : null,
       expectedAmount: parseAmount(values.expectedAmount) || 0,
       dayOfMonth: Number(values.dayOfMonth) || null,
       categoryId: values.categoryId || null,
@@ -2118,8 +2336,14 @@ document.addEventListener('click', guard(async (e) => {
         // 화면에는 늘 양수로 보여 주고, 마이너스인지는 체크로 말한다
         form.elements.balance.value = row.type === 'card' ? '' : won(Math.abs(row.balance || 0));
         form.elements.isMinus.checked = Number(row.balance || 0) < 0;
+        form.elements.revolving.checked = row.revolving === true;
+        form.elements.revolvingBalance.value = row.revolvingBalance ? won(row.revolvingBalance) : '';
+        const key = row.statementGroupId;
+        const mate = key && D.accounts.find((a) => a.id !== row.id && (a.statementGroupId || a.id) === key);
+        form.elements.statementWith.value = mate ? mate.id : '';
         syncAccountForm();
       }
+      if (kind === 'recurring') syncRecurringForm();
       const box = form.closest('.fold');
       if (box && !box.open) box.open = true;
       form.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2177,8 +2401,12 @@ document.addEventListener('change', guard(async (e) => {
     return;
   }
 
-  if (e.target.name === 'type' && e.target.closest('[data-form="accounts"]')) {
+  if (e.target.closest('[data-form="accounts"]')
+      && ['type', 'revolving'].includes(e.target.name)) {
     return syncAccountForm();
+  }
+  if (e.target.name === 'period' && e.target.closest('[data-form="recurring"]')) {
+    return syncRecurringForm();
   }
   if (e.target.name === 'kind' && e.target.closest('[data-form="goal"]')) {
     return syncGoalForm();

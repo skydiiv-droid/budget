@@ -19,8 +19,11 @@
 const TOKEN = '여기에-위젯-비밀번호';
 const URL = 'https://summary-6ygn4mmscq-du.a.run.app';
 
+// 부호는 국내 관례 — 플러스가 빨강, 마이너스가 파랑
 const BLUE = new Color('#1D6FE0');
-const SPEND = new Color('#D1483C');
+const UP = new Color('#C7362B');
+const DOWN = new Color('#1D6FE0');
+const WARN = new Color('#C08A1E');
 const INK = new Color('#10151C');
 const MUTED = new Color('#5B6573');
 
@@ -40,8 +43,8 @@ async function load() {
 
 /** 예산을 안 잡았으면 "오늘 쓸 수 있는 돈"이 없다. 그때는 쓴 돈을 보여 준다. */
 const headline = (d) => (d.budget
-  ? { label: '오늘 쓸 수 있는 돈', value: d.perDay, color: d.perDay > 0 ? BLUE : SPEND }
-  : { label: '이 달에 쓴 돈', value: d.spent, color: SPEND });
+  ? { label: '오늘 쓸 수 있는 돈', value: d.perDay, color: d.perDay > 0 ? UP : WARN }
+  : { label: '이 달에 쓴 돈', value: d.spent, color: INK });
 
 function text(stack, s, { size = 13, color = INK, bold = false, opacity = 1 } = {}) {
   const t = stack.addText(String(s));
@@ -97,7 +100,7 @@ function small(w, d) {
   text(w, won(h.value), { size: 24, bold: true, color: h.color });
   w.addSpacer(8);
   if (d.budget) {
-    bar(w, Math.min(100, d.usedPct), d.usedPct > 100 ? SPEND : BLUE);
+    bar(w, Math.min(100, d.usedPct), d.usedPct > 100 ? WARN : BLUE);
     w.addSpacer(5);
     text(w, `${d.usedPct}% · ${d.daysLeft}일 남음`, { size: 11, color: MUTED });
   } else {
@@ -105,7 +108,7 @@ function small(w, d) {
   }
   if (d.waiting) {
     w.addSpacer(4);
-    text(w, `정리할 게 ${d.waiting}건`, { size: 11, color: SPEND, bold: true });
+    text(w, `정리할 게 ${d.waiting}건`, { size: 11, color: WARN, bold: true });
   }
 }
 
@@ -124,7 +127,7 @@ function medium(w, d) {
   if (d.nextBill) {
     text(right, '다음 카드값', { size: 11, color: MUTED });
     right.addSpacer(3);
-    text(right, won(d.billTotal), { size: 17, bold: true, color: SPEND });
+    text(right, won(d.billTotal), { size: 17, bold: true, color: DOWN });
     text(right, `${d.nextBill.payAt.slice(5).replace('-', '/')} · ${d.nextBill.daysLeft}일 뒤`,
          { size: 11, color: MUTED });
     right.addSpacer(8);
@@ -134,7 +137,7 @@ function medium(w, d) {
     text(right, '지난달 같은 기간보다', { size: 11, color: MUTED });
     right.addSpacer(2);
     text(right, `${gap >= 0 ? '+' : '−'}${short(Math.abs(gap))}`,
-         { size: 17, bold: true, color: gap > 0 ? SPEND : BLUE });
+         { size: 17, bold: true, color: gap > 0 ? WARN : UP });
   }
   if (d.goalPct !== null && d.goalPct !== undefined) {
     right.addSpacer(8);

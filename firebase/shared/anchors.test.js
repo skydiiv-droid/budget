@@ -118,3 +118,52 @@ test('이미 맞춰 놨으면 갈아 끼울 게 없다', () => {
 test('붙일 계좌가 없으면 말이 없다', () => {
   assert.deepEqual(balanceCheck({ anchors: [bal('2026-09-19T20:02:00', 1)], accounts: [] }), []);
 });
+
+// ───────────────────────────────────────────────── 카드 묶음
+
+const PAIR = [
+  { id: 'c1', name: '현대 이마트Plus', type: 'card', cardType: 'credit',
+    issuer: '현대카드', statementGroupId: 'hd', active: true },
+  { id: 'c2', name: '현대 미래에셋', type: 'card', cardType: 'credit',
+    issuer: '현대카드', statementGroupId: 'hd', active: true },
+];
+
+test('누적은 카드 한 장이 아니라 청구서 한 장 기준이다', () => {
+  // 미래에셋 10만 + 이마트 5만 + 미래에셋 1만 = 누적 16만
+  const [r] = cardCheck({
+    anchors: [anchor('2026-09-19T12:00:00', 160_000)],
+    transactions: [
+      { ...buy(5, 100_000), accountId: 'c2' },
+      { ...buy(6, 50_000), accountId: 'c1' },
+      { ...buy(7, 10_000), accountId: 'c2' },
+    ],
+    accounts: PAIR,
+  });
+  assert.equal(r.counted, 160_000, '카드 하나로만 견주면 영영 안 맞는다');
+  assert.equal(r.ok, true);
+  assert.equal(r.name, '현대 이마트Plus + 현대 미래에셋');
+});
+
+test('안 묶인 카드는 따로 견준다', () => {
+  const apart = PAIR.map((c) => ({ ...c, statementGroupId: '' }));
+  const [r] = cardCheck({
+    anchors: [anchor('2026-09-19T12:00:00', 160_000)],
+    transactions: [{ ...buy(5, 100_000), accountId: 'c2' },
+                   { ...buy(6, 50_000), accountId: 'c1' }],
+    accounts: apart,
+  });
+  assert.equal(r.counted, 50_000, '이마트 것만 센다');
+  assert.equal(r.missing, 110_000);
+});
+
+test('손으로 넣은 거래도 함께 센다', () => {
+  const [r] = cardCheck({
+    anchors: [anchor('2026-09-19T12:00:00', 60_000)],
+    transactions: [
+      { ...buy(5, 50_000), accountId: 'c1' },
+      { ...buy(6, 10_000), accountId: 'c2', source: 'manual' },
+    ],
+    accounts: PAIR,
+  });
+  assert.equal(r.ok, true, '내역에서 넣은 건이 대조에 안 잡히면 영영 안 맞는다');
+});

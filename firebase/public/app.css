@@ -1,13 +1,25 @@
 /* 파랑을 바탕에 두되 파랗게 뒤덮지는 않는다. 파랑은 바탕과 움직이는 것들에만 쓰고,
    화면의 대부분은 옅은 회색과 흰색이 차지한다.
-   지출은 붉은색이다. 파랑과 붉은색은 적색약에서도 ΔE 25 로 갈려 — 적·녹 조합과
-   달리 안전하다. 그래도 색만으로 구분하지 않도록 부호와 글자를 늘 함께 둔다. */
+
+   돈의 부호는 국내 관례를 따른다 — **플러스가 빨강, 마이너스가 파랑**이다.
+   들어온 돈 · 잔고는 빨강, 나간 돈 · 빚은 파랑.
+   둘은 적색약에서도 ΔE 27 로 갈려 안전하지만, 그래도 색만으로 구분하지 않도록
+   부호(+ −)와 글자를 늘 함께 둔다.
+
+   "예산을 넘겼다"는 부호가 아니라 경고라서 빨강을 쓰지 않는다. 빨강을 쓰면
+   넘긴 것과 들어온 돈이 같은 색이 된다. 호박색을 따로 둔다. */
 :root{
   --ground:#F4F7FB; --card:#FFF; --ink:#10151C; --ink2:#4A5568; --ink3:#5B6573;
   --line:#E2E8F0; --line2:#EEF2F7;
   --blue:#1D6FE0; --blue-dim:#EAF1FC; --blue-line:#C6DBF6;
-  --spend:#D1483C; --spend-dim:#FBEDEB; --spend-line:#F0CFCA;
+
+  --up:#C7362B;   --up-dim:#FBEDEB;   --up-line:#F0CFCA;
+  --down:#1D6FE0; --down-dim:#EAF1FC; --down-line:#C6DBF6;
+
   --warn:#7A5A10; --warn-mark:#C08A1E; --warn-dim:#FDF6E7; --warn-line:#E8DAB4;
+
+  /* 예전 이름. 남은 데가 있어도 검게 나오지 않도록 남겨 둔다. */
+  --spend:#1D6FE0; --spend-dim:#EAF1FC; --spend-line:#C6DBF6;
 }
 *{box-sizing:border-box}
 
@@ -62,7 +74,7 @@ button.act{font:inherit;font-size:13.5px;font-weight:600;min-height:44px;padding
 button.primary{background:var(--blue);color:#fff}
 button.ghost{background:#fff;color:var(--ink2);border-color:#D3DCE6}
 button.tint{background:var(--blue-dim);color:#134F9E;border-color:var(--blue-line)}
-button.danger{background:var(--spend-dim);color:var(--spend);border-color:var(--spend-line);
+button.danger{background:var(--up-dim);color:var(--up);border-color:var(--up-line);
   font-size:12px;padding:7px 11px;min-height:36px}
 button.small{font-size:12px;padding:7px 11px;min-height:36px}
 
@@ -75,7 +87,7 @@ button.small{font-size:12px;padding:7px 11px;min-height:36px}
 .tabs button[aria-current="page"]::before{content:"";position:absolute;top:0;left:50%;
   transform:translateX(-50%);width:26px;height:2px;border-radius:0 0 2px 2px;background:var(--blue)}
 .badge{position:absolute;top:7px;left:50%;margin-left:12px;min-width:17px;height:17px;
-  padding:0 4px;border-radius:9px;background:var(--spend);color:#fff;
+  padding:0 4px;border-radius:9px;background:var(--up);color:#fff;
   font-size:10.5px;font-weight:700;line-height:17px;text-align:center}
 
 /* 달마다 쓴 돈 — 한 줄기뿐이라 색은 하나. 막대가 길수록 진하게 칠하면
@@ -170,6 +182,7 @@ body.masked .bar>i{filter:blur(4px)}
 .tx[aria-expanded="true"]{background:var(--blue-dim);border-radius:10px;padding:11px 10px;
   border-bottom-color:transparent}
 .tx.off .tx-name,.tx.off .tx-amt{color:var(--ink3);text-decoration:line-through}
+.note.over{background:var(--warn-dim);border-color:var(--warn-line);color:var(--warn)}
 .edit{background:var(--blue-dim);border:1px solid var(--blue-line);border-radius:12px;
   padding:14px;margin:0 0 11px}
 .check{display:flex;align-items:center;gap:9px;font-size:12.5px;font-weight:500;
@@ -199,6 +212,17 @@ details.mini[open]>summary::before{content:"▾ "}
 .fold[open]>summary .fold-x{transform:rotate(-135deg) translate(-2px,-2px)}
 .fold[open]>summary .fold-t{color:var(--blue)}
 .fold-b{padding:16px 18px 18px}
+
+/* 설정의 큰 갈래 — 접힌 칸이 열한 개면 그것대로 못 찾는다 */
+.grp{margin-bottom:12px}
+.grp>summary{display:flex;align-items:center;gap:10px;padding:10px 4px;
+  cursor:pointer;list-style:none}
+.grp>summary::-webkit-details-marker{display:none}
+.grp-t{font-size:12.5px;font-weight:700;color:var(--ink2);letter-spacing:.02em}
+.grp[open]>summary .grp-t{color:var(--blue)}
+.grp[open]>summary .fold-x{transform:rotate(-135deg) translate(-2px,-2px)}
+.grp-b{padding-top:2px}
+.grp .fold{margin-bottom:8px}
 
 table{width:100%;border-collapse:collapse;font-size:12px}
 th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line2);

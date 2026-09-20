@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ledger, matchRecurring, monthSpending, breakdown, shiftMonth, monthWindow,
-         sameSpanLastMonth, pace, trend } from './ledger.js';
+         sameSpanLastMonth, pace, trend, fixedDueIn } from './ledger.js';
 
 const NOW = new Date(2026, 8, 20, 12, 0);   // 2026-09-20
 const SETTINGS = { monthlyIncome: 2800000, variableBudget: 1300000, cycleStartDay: 1 };
@@ -332,4 +332,22 @@ test('이번 달은 아직 안 끝났다고 말해 준다', () => {
   assert.ok(last.projected > last.total,
     '끝난 달과 나란히 두면 "이번 달은 적게 썼네"로 잘못 읽힌다');
   assert.equal(t[0].projected, t[0].total, '끝난 달은 끝값이 곧 합계다');
+});
+
+test('연 1회 고정비는 열두 달로 나눠 얹는다', () => {
+  const L = run({ recurring: [
+    { id: 'r1', name: '넷플릭스', expectedAmount: 17_000 },
+    { id: 'r2', name: '자동차보험', expectedAmount: 600_000, period: 'yearly', monthOfYear: 3 },
+  ] });
+  assert.equal(L.planned.fixed, 17_000 + 50_000,
+    '나가는 달에만 세면 나머지 열한 달은 여력이 있는 줄 안다');
+});
+
+test('이 달에 실제로 빠질 고정비만 따로 셀 수 있다', () => {
+  const list = [
+    { id: 'r1', name: '넷플릭스', expectedAmount: 17_000 },
+    { id: 'r2', name: '자동차보험', expectedAmount: 600_000, period: 'yearly', monthOfYear: 3 },
+  ];
+  assert.deepEqual(fixedDueIn(list, '2026-09').map((r) => r.id), ['r1']);
+  assert.deepEqual(fixedDueIn(list, '2026-03').map((r) => r.id), ['r1', 'r2']);
 });

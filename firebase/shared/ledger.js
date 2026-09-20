@@ -25,6 +25,25 @@ import { prevBusinessDay } from './holidays.js';
  * 1일 시작이면 달력 월이라 옮길 것이 없다. 통계와 비교는 이쪽을 쓴다 —
  * 경계가 해마다 흔들리면 지난달과 견줄 수가 없다.
  */
+/**
+ * 한 달에 나가는 고정비.
+ *
+ * 연 1회짜리(자동차보험 · 연회비)는 열두 달로 나눠 얹는다. 나가는 달에만
+ * 세면 그달만 갑자기 여력이 없어 보이고 나머지 열한 달은 있는 줄 안다.
+ */
+export function monthlyFixed(recurring = []) {
+  return recurring.reduce((sum, r) => {
+    const amount = Number(r.expectedAmount || 0);
+    return sum + (r.period === 'yearly' ? amount / 12 : amount);
+  }, 0);
+}
+
+/** 이 달에 실제로 빠져나갈 고정비. 연 1회짜리는 그달에만. */
+export function fixedDueIn(recurring = [], yyyymm) {
+  const month = Number(String(yyyymm).split('-')[1]);
+  return recurring.filter((r) => r.period !== 'yearly' || Number(r.monthOfYear) === month);
+}
+
 export function monthWindow(yyyymm, cycleStartDay = 1, opts = {}) {
   const [year, month] = String(yyyymm).split('-').map(Number);
   const day = Number(cycleStartDay) || 1;
@@ -91,7 +110,7 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
 
   // ── 계획 ────────────────────────────────────────────────
   const plannedIncome = Number(settings.monthlyIncome || 0);
-  const plannedFixed = recurring.reduce((sum, r) => sum + Number(r.expectedAmount || 0), 0);
+  const plannedFixed = monthlyFixed(recurring);
   const variableBudget = Number(settings.variableBudget || 0);
   const available = plannedIncome - plannedFixed - variableBudget;
 

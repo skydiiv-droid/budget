@@ -234,3 +234,7 @@ th{font-weight:600;color:var(--ink2);white-space:nowrap}
   font:inherit;color:var(--ink);cursor:pointer;padding:10px 0;background:none;
   border:0;border-bottom:1px solid var(--warn-line)}
 .pickrow:last-of-type{border-bottom:0}
+
+/* 글 속에 끼워 넣는 작은 단추 — "연결 풀기" 같은 것 */
+.linkbtn{font:inherit;font-size:inherit;color:var(--blue);background:none;border:0;
+  padding:0;text-decoration:underline;cursor:pointer}

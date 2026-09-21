@@ -217,3 +217,17 @@ test('금액이 달마다 다른 건은 날짜만 보고 고른다', () => {
 test('해지한 것은 한 달 고정지출에서 빠진다', () => {
   assert.deepEqual(liveRecurring([netflix, { ...netflix, id: 'r2', active: false }]).map((r) => r.id), ['r1']);
 });
+
+test('고정지출이 사라진 뒤 남은 연결은 어느 것에도 안 붙는다', () => {
+  // 이어 붙인 고정지출을 지우면 거래에 recurringId 만 남는다.
+  // 그 거래는 다른 어떤 고정지출로도 안 잡히고, 골라 이을 수도 없게 된다.
+  const orphan = { id: 't1', type: 'expense', amount: 17_000,
+    occurredAt: '2026-09-15T04:10:00', merchantRaw: '넷플릭스', recurringId: 'r_없어진것' };
+
+  assert.equal(hitsRecurring(orphan, netflix), false, '이름이 맞아도 안 붙는다');
+  assert.deepEqual(candidates(netflix, [orphan], '2026-09'), [], '고를 수도 없다');
+
+  const row = fixedStatus({ recurring: [netflix], transactions: [orphan] },
+    '2026-09', new Date('2026-09-20T09:00:00'))[0];
+  assert.equal(row.state, 'late', '들어왔는데도 안 들어온 것으로 센다');
+});

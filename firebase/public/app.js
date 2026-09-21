@@ -62,6 +62,16 @@ let dutyFound = null;    // 근무표 앱에서 방금 읽어 온 것
  * (검색 · 내보내기 · 옛 달 보기)에서는 마저 읽는다.
  */
 let wantAll = false;
+let olderTxns = null;    // 창 밖의 거래. 한 번 읽어 두고 들고 간다.
+
+/**
+ * 창 밖 거래를 다시 읽게 한다.
+ *
+ * 안 그러면 전체를 한 번 읽은 뒤로 무엇을 누르든 매번 전부 다시 내려받는다.
+ * 거래를 건드리는 곳은 이걸 불러야 한다 — 안 부르면 그 옛 줄만 옛 값으로
+ * 남는다. `txnwrite.test.js` 가 빠뜨린 곳을 잡는다.
+ */
+const dropOlder = () => { olderTxns = null; };
 let histMonth = null;
 let histOpen = null;
 let editTxn = null;
@@ -339,6 +349,7 @@ async function bindCardTransactions() {
   }
   if (!ops.length) return 0;
   await commitAll(ops);
+  dropOlder();
   return ops.length;
 }
 
@@ -387,9 +398,25 @@ async function migrateDebts() {
  * 검색 · 내보내기 · 옛 달 보기는 다 있어야 맞는 답이 나온다. 한 번 읽으면
  * 이 세션 동안은 계속 다 들고 간다 — 다시 반쪽이 되면 또 조용히 틀린다.
  */
+/**
+ * 그 고정지출에 이어 붙여 둔 거래를 다 푼다.
+ *
+ * 거래를 전부 읽어 올 것 없이 붙은 것만 물어보면 된다. 창 밖의 옛 거래에
+ * 붙어 있어도 이쪽으로는 잡힌다.
+ */
+async function unlinkAll(recurringId) {
+  const hit = await getDocs(query(col('txns'), where('recurringId', '==', recurringId)))
+    .catch(() => null);
+  if (!hit || hit.empty) return 0;
+  await commitAll(hit.docs.map((d) => (b) => b.update(doc(col('txns'), d.id), { recurringId: '' })));
+  dropOlder();
+  return hit.docs.length;
+}
+
 async function loadAll(why) {
   if (wantAll) return false;
   wantAll = true;
+  olderTxns = null;
   toast(why ? `${why} — 지난 내역을 마저 불러옵니다…` : '지난 내역을 마저 불러옵니다…');
   await refresh();
   return true;
@@ -408,40 +435,51 @@ function olderNote(where) {
 }
 
 async function refresh() {
-  // 다 읽기로 한 적이 없으면 기본 화면이 쓰는 만큼만 읽는다.
-  const from = wantAll ? '' : windowStart(new Date());
-  const txnQuery = from
-    ? query(col('txns'), orderBy('occurredAt', 'desc'), where('occurredAt', '>=', from))
-    : query(col('txns'), orderBy('occurredAt', 'desc'));
+  // 기본 화면이 쓰는 만큼은 늘 새로 읽는다. 창 밖의 옛 것은 잘 안 바뀌므로
+  // 한 번 읽어 두고 들고 간다 — 매번 다시 받으면 뭘 누르든 몇 초씩 걸린다.
+  const from = windowStart(new Date());
+  const txnQuery = query(col('txns'), orderBy('occurredAt', 'desc'),
+    where('occurredAt', '>=', from));
+  const olderQuery = query(col('txns'), orderBy('occurredAt', 'desc'),
+    where('occurredAt', '<', from));
 
   const [categories, rules, merchants, accounts, recurring, settlements,
-         txns, raw, settingsSnap, shiftSnap, anchors, oldest] =
+         recent, fetchedOlder, raw, settingsSnap, shiftSnap, anchors, oldest] =
     await Promise.all([
       readAll('categories'), readAll('rules'), readAll('merchants'), readAll('accounts'),
       readAll('recurring'), readAll('settlements'),
       getDocs(txnQuery).then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      getDocs(query(col('raw'), orderBy('receivedAt', 'desc'), limit(100)))
-        .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      wantAll && !olderTxns
+        ? getDocs(olderQuery).then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() })))
+        : Promise.resolve(null),
+      // 최근 100통만 보면, 읽어 들인 문자가 그 자리를 채우는 사이 못 읽은
+      // 옛 문자가 조용히 화면에서 사라진다. 못 읽은 것만 콕 집어 찾는다.
+      getDocs(query(col('raw'), where('parsedOk', '==', false), limit(300)))
+        .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() })))
+        .then((list) => list.sort((a, b) =>
+          String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')))),
       getDoc(doc(db, 'users', uid, 'meta', 'settings')),
       getDoc(doc(db, 'users', uid, 'meta', 'shifts')),
       getDocs(query(col('anchors'), orderBy('at', 'desc'), limit(120)))
         .then((x) => x.docs.map((d) => ({ id: d.id, ...d.data() })))
         .catch(() => []),
       // 제일 오래된 거래 한 건. 창 밖에 뭐가 남았는지 알려면 이것만 있으면 된다.
-      from
-        ? getDocs(query(col('txns'), orderBy('occurredAt', 'asc'), limit(1)))
-            .then((x) => x.docs[0]?.data()?.occurredAt || '')
-            .catch(() => '')
-        : Promise.resolve(''),
+      getDocs(query(col('txns'), orderBy('occurredAt', 'asc'), limit(1)))
+        .then((x) => x.docs[0]?.data()?.occurredAt || '')
+        .catch(() => ''),
     ]);
+
+  if (fetchedOlder) olderTxns = fetchedOlder;
+  const txns = wantAll && olderTxns ? [...recent, ...olderTxns] : recent;
 
   const settings = settingsSnap.exists() ? settingsSnap.data() : { ...SETTINGS };
   const ingestSnap = await getDoc(doc(db, 'config/ingest')).catch(() => null);
   const ingest = ingestSnap?.exists() ? ingestSnap.data() : {};
   const shifts = shiftSnap.exists() ? (shiftSnap.data().days || {}) : {};
   D = { categories, rules, merchants, accounts, recurring, settlements,
-        txns, raw, settings, ingest, shifts, anchors,
-        from, oldest, hasOlder: hasOlderThan(oldest, from) };
+        txns, raw, settings, ingest, shifts, anchors, from, oldest,
+        // 다 읽어 왔으면 창 밖에 남은 것도 없다
+        hasOlder: !wantAll && hasOlderThan(oldest, from) };
   D.ledger = ledger({ transactions: txns, recurring, settlements, accounts,
                       categories, raw, settings });
 
@@ -476,6 +514,7 @@ async function autoOffset() {
     if (!match || !confident) continue;
     ops.push((b) => b.update(doc(col('txns'), match.id), voidPatch(c)));
     ops.push((b) => b.update(doc(col('txns'), c.id), settledPatch(match)));
+    dropOlder();
     done++;
   }
   if (!done) return;
@@ -1591,7 +1630,9 @@ function fixedNote(r, st) {
 
   if (st.state === 'paid') {
     const at = new Date(st.txn.occurredAt);
-    bits.push(`<b style="color:var(--ink2)">${DATE_SHORT(at)} 출금 확인</b>`);
+    const byHand = st.txn.recurringId === r.id;
+    bits.push(`<b style="color:var(--ink2)">${DATE_SHORT(at)} 출금 확인</b>${
+      byHand ? ` — <button type="button" class="linkbtn" data-unlink="${st.txn.id}">연결 풀기</button>` : ''}`);
     if (st.diff) {
       bits.push(`등록액보다 <b class="num" style="color:var(--warn-mark)">${
         won(Math.abs(st.diff))}</b> ${st.diff > 0 ? '많음' : '적음'}`);
@@ -2104,7 +2145,9 @@ async function loadDuty() {
   }
   toast('불러오는 중…');
   try {
-    const res = await fetch(url, { headers: { accept: 'application/json' } });
+    // 데이터베이스가 크면 한없이 받고 있을 수 있다. 끊을 줄은 알아야 한다.
+    const stop = AbortSignal.timeout ? AbortSignal.timeout(20_000) : undefined;
+    const res = await fetch(url, { headers: { accept: 'application/json' }, signal: stop });
     if (res.status === 401 || res.status === 403) {
       dutyFound = { error: '근무표 앱이 로그인을 요구합니다 — 읽기 규칙을 확인하세요.' };
     } else if (!res.ok) {
@@ -2116,7 +2159,9 @@ async function loadDuty() {
       dutyFound = tree ? { duties: findDuties(tree, { month }) } : { error: '비어 있습니다' };
     }
   } catch (err) {
-    dutyFound = { error: `닿지 못했습니다 — ${err.message}` };
+    dutyFound = { error: err.name === 'TimeoutError'
+      ? '20초 안에 응답이 없습니다 — 주소를 「…/duties/2026-09」처럼 좁혀 보세요.'
+      : `닿지 못했습니다 — ${err.message}` };
   }
   renderSetup();
 }
@@ -2127,6 +2172,12 @@ async function putDuty(months) {
   const mine = dutiesOf(dutyFound?.duties || [], who)
     .filter((d) => months.includes(d.month));
   if (!mine.length) return toast('넣을 근무표가 없습니다');
+
+  // 이미 넣어 둔 달을 말없이 갈아엎지 않는다. 되돌릴 길이 없는 일이다.
+  const over = mine.filter((d) => Object.keys(D.shifts).some((k) => k.startsWith(d.month)));
+  if (over.length && !confirm(
+    `${over.map((d) => Number(d.month.split('-')[1]) + '월').join(' · ')} 근무표가 이미 있습니다.\n\n`
+    + '가져온 것으로 덮어쓸까요? 되돌릴 수 없습니다.')) return;
 
   let days = { ...D.shifts };
   let count = 0;
@@ -2253,6 +2304,7 @@ async function pickCategory(txnId, categoryId, box) {
   const { scope, keyword } = parseScope(scopeValue, txn.merchantRaw);
 
   const batch = writeBatch(db);
+  dropOlder();
   batch.update(doc(col('txns'), txnId), { categoryId, status: 'confirmed' });
 
   const normalized = normalizeMerchant(txn.merchantRaw);
@@ -2283,6 +2335,8 @@ async function pickCategory(txnId, categoryId, box) {
   let past = 0;
 
   if (sweepWord && (scope !== 'once' || alsoPast)) {
+    // 지난 건까지 바꾸는 가지다. 여기서 바뀌는 건 말 그대로 옛 거래다.
+    dropOlder();
     for (const t of D.txns) {
       if (t.id === txnId || t.type !== 'expense' || t.categoryId === categoryId) continue;
       const waiting = t.status === 'pendingCategory' && !t.categoryId;
@@ -2349,6 +2403,7 @@ async function deleteCategory(id) {
   const rules = D.rules.filter((r) => r.categoryId === id);
   const shops = D.merchants.filter((m) => m.defaultCategoryId === id);
   const fixed = D.recurring.filter((r) => r.categoryId === id);
+  dropOlder();                       // 옛 거래도 이 카테고리를 쓰고 있었을 수 있다
   const moves = [
     ...txns.map((t) => (b) => b.update(doc(col('txns'), t.id), { categoryId: to })),
     ...rules.map((r) => (b) => b.update(doc(col('rules'), r.id), { categoryId: to })),
@@ -2647,6 +2702,7 @@ document.addEventListener('click', guard(async (e) => {
     const next = !known && learn ? [...words, t.merchantRaw.trim()] : words;
 
     const batch = writeBatch(db);
+    dropOlder();
     batch.update(doc(col('txns'), tid), { recurringId: rid });
     if (next !== words) batch.update(doc(col('recurring'), rid), { keywords: next });
     await batch.commit();
@@ -2729,6 +2785,7 @@ document.addEventListener('click', guard(async (e) => {
     const c = D.txns.find((t) => t.id === cancelId);
     const o = D.txns.find((t) => t.id === originalId);
     if (!c || !o) return;
+    dropOlder();
     await commitAll([
       (b) => b.update(doc(col('txns'), o.id), voidPatch(c)),
       (b) => b.update(doc(col('txns'), c.id), settledPatch(o)),
@@ -2739,6 +2796,7 @@ document.addEventListener('click', guard(async (e) => {
 
   const dropCancel = e.target.closest('[data-dropcancel]');
   if (dropCancel) {
+    dropOlder();
     await updateDoc(doc(col('txns'), dropCancel.dataset.dropcancel),
       { status: 'settled', offsetsId: 'none' });
     await refresh();
@@ -2802,10 +2860,22 @@ document.addEventListener('click', guard(async (e) => {
   const del = e.target.closest('[data-del]');
   if (del && confirm('삭제할까요?')) {
     const [name, id] = del.dataset.del.split(':');
+    // 이어 붙여 둔 거래를 안 풀어 주면 없어진 고정지출을 가리킨 채 남는다.
+    // 그 거래는 어느 고정지출로도 안 잡히고 다시 이을 수도 없게 된다.
+    if (name === 'recurring') await unlinkAll(id);
     await deleteDoc(doc(col(name), id));
-    if (name === 'txns') editTxn = null;
+    if (name === 'txns') { editTxn = null; dropOlder(); }
     await refresh();
     return toast('삭제했습니다');
+  }
+
+  // 잘못 이었을 때 푸는 길. 한 번 누르면 되돌릴 수 없는 건 기능이 아니다.
+  const unlink = e.target.closest('[data-unlink]');
+  if (unlink) {
+    await updateDoc(doc(col('txns'), unlink.dataset.unlink), { recurringId: '' });
+    dropOlder();
+    await refresh();
+    return toast('연결을 풀었습니다');
   }
 
   if (e.target.id === 'dutyLoad') return loadDuty();
@@ -2957,6 +3027,7 @@ document.addEventListener('submit', guard(async (e) => {
   if (form.dataset.txn) {
     const amount = parseAmount(values.amount);
     if (!amount) return toast('금액을 입력하세요');
+    dropOlder();                     // 창 밖의 옛 거래를 고쳤을 수도 있다
     await updateDoc(doc(col('txns'), form.dataset.txn), {
       amount,
       merchantRaw: String(values.merchantRaw || '').trim(),

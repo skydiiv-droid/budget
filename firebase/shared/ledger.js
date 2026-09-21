@@ -27,6 +27,41 @@ import { prevBusinessDay } from './holidays.js';
  * 경계가 해마다 흔들리면 지난달과 견줄 수가 없다.
  */
 /**
+ * 이번 달 아낀 만큼이 목표를 며칠 당기나.
+ *
+ * 이 가계부를 쓰는 이유는 기록이 아니라 **두 달 안에 리볼빙을 정리하는 것**이다.
+ * 그런데 화면에 있는 건 "예산의 63%를 썼다" 같은 말뿐이라, 오늘 커피를 참는
+ * 일과 그 목표 사이가 끊겨 있다. 이어 준다.
+ *
+ *   아낀 돈은 고스란히 갚는 데 쓰인다고 본다. 남는 돈은 결국 거기로 간다.
+ *   여력이 늘면 갚는 달수가 줄고, 그 차이가 곧 며칠이다.
+ *
+ * 세 가지 경우가 있다.
+ *   days     지금도 갚고 있고, 아낀 만큼 더 빨라진다
+ *   unlocks  여태 여력이 0 이하였는데 아낀 덕에 갚을 수 있게 된다
+ *   stalls   더 쓴 탓에 갚을 여력이 사라진다
+ */
+export function paceShift(remaining, available, saved) {
+  const left = Number(remaining || 0);
+  const now = Number(available || 0);
+  const gain = Number(saved || 0);
+  const then = now + gain;
+  if (left <= 0 || !gain) return null;
+
+  const months = (per) => (per > 0 ? left / per : null);
+  const a = months(now);
+  const b = months(then);
+
+  if (a === null && b === null) return null;
+  if (a === null) return { unlocks: true, stalls: false, days: 0, per: then };
+  if (b === null) return { unlocks: false, stalls: true, days: 0, per: now };
+
+  const days = Math.round((a - b) * 30.44);
+  if (!days) return null;
+  return { unlocks: false, stalls: false, days, per: then };
+}
+
+/**
  * 얼마나 거슬러 올라가 읽어 둘 것인가.
  *
  * 다 읽어 오면 열 때마다 몇 천 건이 딸려 온다. 안 읽어 오면 그만큼이 화면에서

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { windowStart, hasOlderThan, WINDOW_MONTHS,
+import { windowStart, hasOlderThan, WINDOW_MONTHS, paceShift,
          ledger, matchRecurring, monthSpending, breakdown, shiftMonth, monthWindow,
          sameSpanLastMonth, pace, trend, fixedDueIn, topSpending } from './ledger.js';
 
@@ -395,4 +395,38 @@ test('창보다 옛 것이 남아 있는지 안다', () => {
   // 창이 없다 = 다 읽어 왔다
   assert.equal(hasOlderThan('2020-01-01T00:00:00', ''), false);
   assert.equal(hasOlderThan('', from), false, '거래가 하나도 없으면 옛것도 없다');
+});
+
+test('아낀 만큼 목표가 당겨지는 날수를 센다', () => {
+  // 남은 빚 300만, 달마다 100만씩 갚는 중 = 3개월.
+  // 이번 달 20만을 덜 쓰면 120만 → 2.5개월. 그만큼 당겨진다.
+  const s = paceShift(3_000_000, 1_000_000, 200_000);
+  assert.equal(s.unlocks, false);
+  assert.equal(s.stalls, false);
+  assert.equal(s.days, Math.round((3 - 2.5) * 30.44));
+  assert.equal(s.per, 1_200_000);
+});
+
+test('더 쓰면 밀린다 — 부호가 반대일 뿐이다', () => {
+  const s = paceShift(3_000_000, 1_000_000, -200_000);
+  assert.ok(s.days < 0, '밀리는 쪽은 음수다');
+});
+
+test('여력이 없다가 생기는 경우를 따로 알려 준다', () => {
+  // 달마다 10만씩 모자라던 사람이 15만을 아끼면 비로소 갚기 시작한다
+  const s = paceShift(3_000_000, -100_000, 150_000);
+  assert.equal(s.unlocks, true);
+  assert.equal(s.per, 50_000);
+});
+
+test('더 써서 갚을 여력이 사라지는 경우도 알려 준다', () => {
+  const s = paceShift(3_000_000, 100_000, -150_000);
+  assert.equal(s.stalls, true);
+});
+
+test('말할 것이 없으면 아무 말도 하지 않는다', () => {
+  assert.equal(paceShift(3_000_000, 1_000_000, 0), null, '아낀 게 없다');
+  assert.equal(paceShift(0, 1_000_000, 200_000), null, '갚을 것이 없다');
+  assert.equal(paceShift(3_000_000, -100_000, -50_000), null, '원래도 못 갚고 있다');
+  assert.equal(paceShift(3_000_000, 100_000_000, 10), null, '하루도 안 당겨지면 말하지 않는다');
 });

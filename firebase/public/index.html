@@ -92,5 +92,11 @@
 </div>
 
 <script type="module" src="/app.js"></script>
+<script>
+  // 껍데기를 담아 둔다. 실패해도 앱은 그대로 돈다 — 담아 두는 건 덤이다.
+  if ('serviceWorker' in navigator) {
+    addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  }
+</script>
 </body>
 </html>

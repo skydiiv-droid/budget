@@ -209,3 +209,102 @@ test('빈 글은 아무것도 안 준다', () => {
   assert.deepEqual(splitMessages(''), []);
   assert.deepEqual(splitMessages('   \n  '), []);
 });
+
+// ── 현대 · 우리 말고도 읽히는가 ───────────────────────────
+//
+// 주의: 아래 문자는 **직접 지어낸 것**이다. 실제 포맷을 받아 본 적이 없다.
+// 그래서 이 검사가 말해 주는 건 "이 곳들의 포맷을 지원한다"가 아니라
+// "포맷을 몰라도 금액·종류·가맹점은 건져낸다"뿐이다.
+// 진짜 문자를 받으면 안 맞는 데가 나올 수 있고, 그때 여기에 더하면 된다.
+
+const ONLY_KNOWN = '발급사 이름을 알아본다';
+
+test(`신한카드 ${ONLY_KNOWN}`, () => {
+  const t = '[Web발신]\n신한카드(1234) 승인\n홍*동\n12,000원 일시불\n09/21 13:02\n스타벅스역삼점';
+  const r = parseMessage(t, '15447000', new Date('2026-09-21T13:02:00'));
+  assert.equal(r.issuer, '신한카드');
+  assert.equal(r.kind, 'approval');
+  assert.equal(r.amount, 12_000);
+  assert.ok(r.ok);
+});
+
+test(`삼성카드 ${ONLY_KNOWN}`, () => {
+  const t = '[Web발신]\n삼성카드 승인\n7,900원 일시불\n09/21 11:20\nGS25서구탑병원점';
+  const r = parseMessage(t, '', new Date('2026-09-21T11:20:00'));
+  assert.equal(r.issuer, '삼성카드');
+  assert.equal(r.amount, 7_900);
+  assert.equal(r.merchantRaw, 'GS25서구탑병원점');
+});
+
+test(`KB국민 ${ONLY_KNOWN}`, () => {
+  const t = '[Web발신]\nKB국민 체크카드 승인\n3,500원\n09/21 08:05\n컴포즈커피';
+  const r = parseMessage(t, '', new Date('2026-09-21T08:05:00'));
+  assert.equal(r.issuer, 'KB국민카드');
+  assert.equal(r.amount, 3_500);
+});
+
+test(`카카오페이 ${ONLY_KNOWN}`, () => {
+  const t = '[Web발신]\n카카오페이 결제\n15,000원\n배달의민족';
+  const r = parseMessage(t, '', new Date('2026-09-21T19:00:00'));
+  assert.equal(r.issuer, '카카오페이');
+  assert.equal(r.kind, 'approval');
+  assert.equal(r.amount, 15_000);
+});
+
+test('같은 이름이라도 은행 문자와 카드 문자를 가른다', () => {
+  const card = parseMessage('[Web발신]\n신한 체크카드 승인\n4,000원\n김밥천국', '',
+    new Date('2026-09-21T12:00:00'));
+  assert.equal(card.issuer, '신한카드');
+
+  const bank = parseMessage('[Web발신]\n신한 09/21 12:00\n출금 50,000\n잔액 812,400', '',
+    new Date('2026-09-21T12:00:00'));
+  assert.equal(bank.issuer, '신한은행');
+  assert.equal(bank.kind, 'withdrawal');
+  assert.equal(bank.balance, 812_400);
+});
+
+test('본문 한가운데 나오는 이름은 가맹점이지 발급사가 아니다', () => {
+  // 우리은행에서 현대백화점 결제 — 현대카드로 읽으면 엉뚱한 카드에 붙는다
+  const r = parseMessage('[Web발신]\n우리 09/21 15:00\n출금 88,000\n현대백화점\n잔액 500,000', '',
+    new Date('2026-09-21T15:00:00'));
+  assert.equal(r.issuer, '우리은행');
+});
+
+test('자동이체와 송금도 나간 돈으로 본다', () => {
+  for (const word of ['자동이체', '송금', '납부']) {
+    const r = parseMessage(`[Web발신]\n우리 09/21 09:00\n${word} 38,400\n잔액 700,000`, '',
+      new Date('2026-09-21T09:00:00'));
+    assert.equal(r.kind, 'withdrawal', word);
+    assert.equal(r.amount, 38_400, word);
+  }
+});
+
+test('타행 입금은 들어온 돈이다 — "이체"가 붙어 있어도', () => {
+  const r = parseMessage('[Web발신]\n우리 09/05 09:00\n타행이체 입금 2,950,000\n잔액 3,100,000', '',
+    new Date('2026-09-05T09:00:00'));
+  assert.equal(r.kind, 'deposit');
+});
+
+test('모르는 곳에서 와도 금액과 종류는 건져낸다', () => {
+  const r = parseMessage('[Web발신]\n어디카드 승인\n5,600원\n이름모를가게', '',
+    new Date('2026-09-21T10:00:00'));
+  assert.equal(r.issuer, '', '이름은 모른다');
+  assert.equal(r.kind, 'approval');
+  assert.equal(r.amount, 5_600);
+  assert.ok(r.ok, '발급사를 몰라도 거래로는 들어간다');
+});
+
+test('카드 상품명은 발급사를 가리지 않고 뽑는다', () => {
+  assert.equal(detectCardName('신한 딥드림 승인'), '딥드림');
+  assert.equal(detectCardName('현대 이마트Plus 승인'), '이마트Plus');
+  assert.equal(detectCardName('KB국민 탄탄대로 결제'), '탄탄대로');
+  assert.equal(detectCardName('현대 승인'), '', '상품명이 없으면 없는 것이다');
+});
+
+test('카드대금이 통장에서 빠지는 문자는 은행 것이다', () => {
+  // "결제"가 들어 있어도 잔액이 찍혀 있으면 은행 문자다
+  const r = parseMessage('[Web발신]\n우리 10/12 09:00\n현대카드대금 결제 820,605\n잔액 500,000', '',
+    new Date('2026-10-12T09:00:00'));
+  assert.equal(r.issuer, '우리은행');
+  assert.equal(r.balance, 500_000);
+});

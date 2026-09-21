@@ -14,7 +14,7 @@
 const KEYWORDS = {
   cancel: ['취소'],
   approval: ['승인', '결제'],
-  withdrawal: ['출금', '지급'],
+  withdrawal: ['출금', '지급', '이체', '송금', '납부', '자동이체'],
   deposit: ['입금'],
   ad: ['(광고)', '[광고]', '광고)'],
 };
@@ -27,10 +27,44 @@ const AMOUNT_LABELS = [
 ];
 
 const MERCHANT_NOISE = [
-  '승인', '취소', '결제', '일시불', '개월', '누적', '잔액', '출금', '입금', '지급',
-  '사용금액', '사용', '체크', '신용', '현대카드', '우리은행', '현대', '우리',
-  '고객님', '원', 'Web발신',
+  '승인', '취소', '결제', '일시불', '할부', '개월', '누적', '잔액', '출금', '입금',
+  '지급', '이체', '송금', '납부', '자동이체', '사용금액', '사용', '체크', '신용',
+  '고객님', '원', 'Web발신', '잔여', '한도', '적립',
 ];
+
+/**
+ * 어느 곳에서 온 문자인가.
+ *
+ * 포맷을 짐작하지 않는다 — **이름만** 안다. 포맷은 곳마다 다르고 바뀌기도 하니
+ * 제네릭 추출기(Layer 1)에 맡기고, 여기서는 "누가 보냈나"만 가린다.
+ * 같은 이름으로 은행도 카드도 있으므로 문자 모양을 보고 둘을 가른다.
+ */
+const BRANDS = [
+  { hit: /우리은행|\[우리\]|(^|\n)\s*우리(?=[\s\d])/, card: '우리카드', bank: '우리은행' },
+  { hit: /KB국민|국민은행|\[KB\]|(^|\n)\s*(KB|국민)(?=[\s\d])/i, card: 'KB국민카드', bank: '국민은행' },
+  { hit: /신한은행|신한카드|(^|\n)\s*신한(?=[\s\d])/, card: '신한카드', bank: '신한은행' },
+  { hit: /하나은행|하나카드|(^|\n)\s*하나(?=[\s\d])/, card: '하나카드', bank: '하나은행' },
+  { hit: /NH농협|농협은행|농협카드|(^|\n)\s*(NH|농협)(?=[\s\d])/i, card: 'NH농협카드', bank: '농협은행' },
+  { hit: /IBK기업|기업은행|(^|\n)\s*IBK(?=[\s\d])/i, card: '', bank: '기업은행' },
+  { hit: /카카오뱅크|카카오페이|(^|\n)\s*카카오(?=[\s\d])/, card: '카카오페이', bank: '카카오뱅크' },
+  { hit: /토스뱅크|토스페이|(^|\n)\s*토스(?=[\s\d])/, card: '토스', bank: '토스뱅크' },
+  { hit: /케이뱅크|(^|\n)\s*케뱅(?=[\s\d])/, card: '', bank: '케이뱅크' },
+  { hit: /새마을금고|(^|\n)\s*새마을(?=[\s\d])/, card: '', bank: '새마을금고' },
+  { hit: /우체국/, card: '', bank: '우체국' },
+  { hit: /현대카드|(^|\n)\s*현대(?=[\s가-힣A-Za-z])/, card: '현대카드', bank: '' },
+  { hit: /삼성카드|(^|\n)\s*삼성(?=[\s가-힣A-Za-z])/, card: '삼성카드', bank: '' },
+  { hit: /롯데카드|(^|\n)\s*롯데(?=[\s가-힣A-Za-z])/, card: '롯데카드', bank: '' },
+  { hit: /BC카드|비씨카드|(^|\n)\s*(BC|비씨)(?=[\s\d])/i, card: 'BC카드', bank: '' },
+];
+
+/**
+ * 이 문자가 카드 결제처럼 생겼는가. 같은 이름의 은행과 카드를 가르는 데 쓴다.
+ *
+ * "결제"만으로는 못 가른다 — 통장에서 카드대금이 빠질 때도 결제라고 적힌다.
+ * 은행 문자에는 **잔액**이 함께 찍히므로 그걸로 가른다.
+ */
+const looksLikeCard = (text) => /승인|일시불|할부|누적|체크카드|신용카드/.test(text)
+  || (/결제/.test(text) && !/잔액|출금|입금/.test(text));
 
 export function parseMessage(body, sender, receivedAt, patterns = []) {
   const text = String(body || '').trim();
@@ -160,14 +194,16 @@ function applyGeneric(text, result, now) {
  * 은행 문자의 가맹점이 "현대백화점"일 수는 있기 때문이다.
  */
 export function detectIssuer(text, sender) {
-  const haystack = `${sender || ''}\n${text}`;
+  // 보낸 사람과 **첫 줄**만 본다. 본문 한가운데 나오는 이름은 가맹점이다 —
+  // "현대백화점"을 현대카드로 읽으면 엉뚱한 카드에 붙는다.
+  const head = `${sender || ''}\n${String(text || '').split('\n').slice(0, 2).join('\n')}`;
+  const card = looksLikeCard(String(text || ''));
 
-  if (/우리은행|\[우리\]|(^|\n)\s*우리[\s\d]/.test(haystack)) return '우리은행';
-
-  const looksLikeCard = /승인|일시불|누적|할부/.test(haystack);
-  if (looksLikeCard && /(^|\n)\s*현대[\s가-힣A-Za-z]/.test(haystack)) return '현대카드';
-  if (/현대\s*카드/.test(haystack)) return '현대카드';
-
+  for (const b of BRANDS) {
+    if (!b.hit.test(head)) continue;
+    const pick = card ? (b.card || b.bank) : (b.bank || b.card);
+    if (pick) return pick;
+  }
   return '';
 }
 
@@ -178,9 +214,11 @@ export function detectIssuer(text, sender) {
  * 따로 오기 때문에, 한 계정으로 합치면 누적 앵커가 서로 덮어써 대사가 깨진다.
  */
 export function detectCardName(text) {
-  const m = /(^|\n)\s*현대\s+([가-힣A-Za-z0-9+]+(?:\s?[가-힣A-Za-z0-9+]+)?)\s+(?:승인|취소|결제)/
+  const m = /(^|\n)\s*[가-힣A-Za-z]{2,6}\s+([가-힣A-Za-z0-9+]+(?:\s?[가-힣A-Za-z0-9+]+)?)\s+(?:승인|취소|결제)/
     .exec(String(text || ''));
-  return m ? m[2].trim() : '';
+  const name = m ? m[2].trim() : '';
+  // "현대 승인" 처럼 상품명이 없으면 붙잡을 것이 없다
+  return MERCHANT_NOISE.includes(name) ? '' : name;
 }
 
 export function detectKind(text) {

@@ -238,3 +238,8 @@ th{font-weight:600;color:var(--ink2);white-space:nowrap}
 /* 글 속에 끼워 넣는 작은 단추 — "연결 풀기" 같은 것 */
 .linkbtn{font:inherit;font-size:inherit;color:var(--blue);background:none;border:0;
   padding:0;text-decoration:underline;cursor:pointer}
+
+/* 끊겼을 때 맨 아래 띠. 탭 위에 얹되 가리지는 않는다. */
+.offbar{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom) + 58px);
+  z-index:40;padding:9px 16px;font-size:12px;line-height:1.5;text-align:center;
+  background:var(--warn-dim);color:var(--warn);border-top:1px solid var(--warn-line)}

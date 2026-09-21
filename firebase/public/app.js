@@ -11,12 +11,13 @@ import {
   onAuthStateChanged, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
-  getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc,
+  getFirestore, initializeFirestore, persistentLocalCache, persistentSingleTabManager,
+  collection, doc, getDoc, getDocs, setDoc, updateDoc,
   deleteDoc, writeBatch, query, orderBy, limit, where,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMonth, pace,
-         windowStart, hasOlderThan } from './shared/ledger.js';
+         windowStart, hasOlderThan, paceShift } from './shared/ledger.js';
 import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf, matchCard } from './shared/accounts.js';
 import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
 import { trend, categoryBudgets, monthlyFixed } from './shared/ledger.js';
@@ -174,7 +175,47 @@ async function start() {
   projectId = config.projectId;
   const app = initializeApp(config);
   auth = getAuth(app);
-  db = getFirestore(app);
+  db = openDb(app);
+  watchNetwork();
+
+/**
+ * 읽은 것을 기기에 남겨 둔다.
+ *
+ * 병원 지하와 지하철에서는 신호가 없다. 그때 흰 화면만 뜨면 쓸 수가 없다.
+ * 남겨 두면 마지막으로 본 것이 그대로 뜨고, 그 사이에 적은 것은 신호가
+ * 돌아올 때 알아서 올라간다.
+ *
+ * 창을 여러 개 띄우면 한쪽만 저장소를 쥔다. 아이폰에서 쓰는 앱이라 그래도 되고,
+ * 저장소를 못 쓰는 환경(사파리 비공개 모드)이면 그냥 예전처럼 돈다.
+ */
+function openDb(app) {
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentSingleTabManager() }),
+    });
+  } catch {
+    return getFirestore(app);
+  }
+}
+
+/** 끊겼는지 알려 준다. 안 알려 주면 "왜 안 바뀌지"가 된다. */
+function watchNetwork() {
+  const paint = () => {
+    const off = navigator.onLine === false;
+    document.body.classList.toggle('offline', off);
+    let bar = $('offbar');
+    if (!off) { bar?.remove(); return; }
+    if (bar) return;
+    bar = document.createElement('div');
+    bar.id = 'offbar';
+    bar.className = 'offbar';
+    bar.textContent = '오프라인 — 마지막으로 불러온 내역입니다. 적은 것은 연결되면 올라갑니다.';
+    document.body.appendChild(bar);
+  };
+  addEventListener('online', paint);
+  addEventListener('offline', paint);
+  paint();
+}
 
   onAuthStateChanged(auth, async (user) => {
     if (!user) return showSignIn();
@@ -188,6 +229,13 @@ async function start() {
       await migrateRevolving();
       await refresh();
     } catch (err) {
+      if (navigator.onLine === false) {
+        screen(`<h1>오프라인입니다</h1>
+          <p class="muted" style="margin-top:10px">신호가 돌아오면 다시 열립니다.<br>
+          한 번도 연 적이 없으면 저장해 둔 것도 없습니다.</p>
+          <button class="act ghost" style="margin-top:16px" onclick="location.reload()">다시 시도</button>`);
+        return;
+      }
       screen(`<h1>열지 못했습니다</h1>
         <p class="muted" style="margin-top:10px;line-height:1.7">${esc(err.message)}</p>
         <button class="act ghost" style="margin-top:16px" onclick="location.reload()">다시 시도</button>`);
@@ -833,7 +881,41 @@ function renderGoal(goal, debt, planned) {
       목표 내 달성하려면 월 <b class="num">₩${won(goal.needPerMonth)}</b>이 필요합니다.
       현재 여력 <b class="num">₩${won(planned.available)}</b>, <b class="num">₩${won(goal.shortfall)}</b> 부족합니다.</div>`;
   }
-  return h;
+  return h + renderShift(goal, planned);
+}
+
+/**
+ * 이번 달 아낀 것이 목표를 며칠 당기는가.
+ *
+ * 다른 줄은 다 "얼마 썼다"를 말한다. 그건 이 가계부를 쓰는 이유가 아니다.
+ * 오늘 덜 쓴 것과 목표 사이를 이어 주는 줄은 여기 하나뿐이다.
+ */
+function renderShift(goal, planned) {
+  const b = D.ledger.budget;
+  if (!b.limit || !planned.income) return '';
+
+  // 예산은 생활비에만 걸린 것이므로 견줄 것도 생활비 쪽 속도여야 한다.
+  const run = pace(b.spent, D.ledger.month, D.settings.cycleStartDay);
+  const saved = b.limit - run.projected;
+  const s = paceShift(goal.remaining, planned.available, saved);
+  if (!s) return '';
+
+  const money = `<b class="num">₩${won(Math.abs(Math.round(saved)))}</b>`;
+  if (s.unlocks) {
+    return `<div class="note ok">이 속도로 아끼면 이번 달 ${money}이 남아
+      <b>갚을 여력이 생깁니다.</b> 지금은 여력이 없습니다.</div>`;
+  }
+  if (s.stalls) {
+    return `<div class="note warn">이 속도로 쓰면 이번 달 ${money}이 모자라
+      <b>갚을 여력이 사라집니다.</b></div>`;
+  }
+  const days = Math.abs(s.days);
+  const when = days >= 30 ? `${Math.round(days / 30.44 * 10) / 10}개월` : `${days}일`;
+  return s.days > 0
+    ? `<div class="note ok">이 속도로 아끼면 이번 달 ${money}이 남아
+       <b>${esc(goal.name)}가 ${when} 당겨집니다.</b></div>`
+    : `<div class="note warn">이 속도로 쓰면 예산보다 ${money} 더 써서
+       <b>${esc(goal.name)}가 ${when} 밀립니다.</b></div>`;
 }
 
 // ───────────────────────────────────────────────── 내역

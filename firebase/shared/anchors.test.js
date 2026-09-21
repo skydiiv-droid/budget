@@ -221,3 +221,93 @@ test('리볼빙을 안 쓰는 카드는 그대로 견준다', () => {
   assert.equal(row.carried, 0);
   assert.equal(row.missing, 32_900);
 });
+
+// ── 언제부터 어긋났나 ────────────────────────────────────
+const HD = [{ id: 'c1', type: 'card', cardType: 'credit', name: '현대 미래에셋', issuer: '현대', active: true }];
+const swipe = (id, amount, at) => ({ id, type: 'expense', amount, occurredAt: at, accountId: 'c1' });
+const ping = (reported, at) => ({ kind: 'cumulative', cardName: '현대 미래에셋', issuer: '현대', reported, at });
+
+test('맞았던 마지막 문자와 처음 틀어진 문자를 짚어 준다', () => {
+  // 9/17 까진 맞다가 9/18 에 32,900 짜리 하나를 놓쳤다
+  const transactions = [
+    swipe('t1', 100_000, '2026-09-10T10:00:00'),
+    swipe('t2', 423_350, '2026-09-17T14:00:00'),
+    swipe('t3', 5_800, '2026-09-19T11:00:00'),
+  ];
+  const anchors = [
+    ping(100_000, '2026-09-10T10:01:00'),
+    ping(523_350, '2026-09-17T14:20:00'),
+    ping(556_250, '2026-09-18T10:20:00'),
+    ping(562_050, '2026-09-19T11:01:00'),
+  ];
+  const [row] = cardCheck({ anchors, transactions, accounts: HD });
+
+  assert.equal(row.lastOk.at, '2026-09-17T14:20:00', '여기까진 맞았다');
+  assert.equal(row.lastOk.reported, 523_350);
+  assert.equal(row.since.at, '2026-09-18T10:20:00', '여기서 틀어졌다');
+  assert.equal(row.since.reported, 556_250);
+  assert.equal(row.since.counted, 523_350);
+  assert.equal(row.since.gap, 32_900, '그 사이에 빠진 금액');
+  assert.equal(row.window, 0, '두 문자가 바로 붙어 있다');
+});
+
+test('사이에 낀 문자가 있으면 몇 통인지 센다', () => {
+  // 맞은 문자와 틀어진 문자 사이에 다른 문자가 껴 있으면 볼 구간이 넓다.
+  // 여기서는 9/12 에 틀어지고 9/13·9/14 도 계속 틀어진 상태로 온다.
+  const transactions = [swipe('t1', 10_000, '2026-09-10T10:00:00')];
+  const anchors = [
+    ping(10_000, '2026-09-10T10:01:00'),
+    ping(50_000, '2026-09-12T10:00:00'),
+    ping(60_000, '2026-09-13T10:00:00'),
+    ping(70_000, '2026-09-14T10:00:00'),
+  ];
+  const [row] = cardCheck({ anchors, transactions, accounts: HD });
+  assert.equal(row.lastOk.at, '2026-09-10T10:01:00');
+  assert.equal(row.since.at, '2026-09-12T10:00:00', '처음 틀어진 곳을 짚는다');
+  assert.equal(row.window, 0);
+});
+
+test('맞은 적이 없으면 맞았던 곳을 지어내지 않는다', () => {
+  const anchors = [ping(50_000, '2026-09-12T10:00:00')];
+  const [row] = cardCheck({ anchors, transactions: [], accounts: HD });
+  assert.equal(row.lastOk, null);
+  assert.equal(row.since.at, '2026-09-12T10:00:00');
+});
+
+test('다시 맞아지면 그 뒤부터 새로 센다', () => {
+  // 중간에 틀어졌다가 문자를 채워 넣어 맞아졌고, 그 뒤에 또 틀어졌다.
+  // 짚어 줄 곳은 **나중** 것이다 — 앞엣것은 이미 해결됐다.
+  const transactions = [
+    swipe('t1', 10_000, '2026-09-10T10:00:00'),
+    swipe('t2', 40_000, '2026-09-11T10:00:00'),
+  ];
+  const anchors = [
+    ping(10_000, '2026-09-10T10:01:00'),
+    ping(50_000, '2026-09-11T10:01:00'),
+    ping(90_000, '2026-09-15T10:00:00'),
+  ];
+  const [row] = cardCheck({ anchors, transactions, accounts: HD });
+  assert.equal(row.lastOk.at, '2026-09-11T10:01:00');
+  assert.equal(row.since.at, '2026-09-15T10:00:00');
+});
+
+test('다 맞으면 짚을 곳이 없다', () => {
+  const transactions = [swipe('t1', 10_000, '2026-09-10T10:00:00')];
+  const anchors = [ping(10_000, '2026-09-10T10:01:00')];
+  const [row] = cardCheck({ anchors, transactions, accounts: HD });
+  assert.equal(row.ok, true);
+  assert.equal(row.since, null);
+});
+
+test('리볼빙 이월분은 짚는 데에도 똑같이 빼 준다', () => {
+  const accounts = [{ ...HD[0], revolving: true, revolvingBalance: 1_000_000, revolvingRatio: 70 }];
+  const transactions = [swipe('t1', 10_000, '2026-09-10T10:00:00')];
+  const anchors = [
+    ping(1_010_000, '2026-09-10T10:01:00'),      // 이월분 포함 — 맞은 것이다
+    ping(1_050_000, '2026-09-12T10:00:00'),      // 40,000 이 빈다
+  ];
+  const [row] = cardCheck({ anchors, transactions, accounts });
+  assert.equal(row.carried, 1_000_000);
+  assert.equal(row.lastOk.at, '2026-09-10T10:01:00');
+  assert.equal(row.since.gap, 40_000);
+});

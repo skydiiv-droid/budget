@@ -446,3 +446,31 @@ test('달이 시작도 안 했으면 아무것도 없다', () => {
   assert.equal(r.enough, false);
   assert.equal(r.projected, 0);
 });
+
+test('분석에서만 뺀 건은 총액에 남고 카테고리에서만 빠진다', () => {
+  const transactions = [
+    { id: 'a', type: 'expense', amount: 30_000, occurredAt: '2026-09-10T10:00:00', categoryId: 'cat_cafe' },
+    { id: 'b', type: 'expense', amount: 500_000, occurredAt: '2026-09-11T10:00:00',
+      categoryId: 'cat_gift', excludeFromStats: true },
+  ];
+  const rows = monthSpending({ transactions }, '2026-09');
+  assert.equal(rows.filter((r) => r.counted).reduce((x, r) => x + r.net, 0), 530_000,
+    '총액에는 그대로 남는다');
+
+  const b = breakdown(rows, []);
+  assert.equal(b.total, 30_000, '카테고리 합에서는 빠진다');
+  assert.equal(b.skipped, 500_000, '얼마가 빠졌는지 말해 준다');
+  assert.equal(b.skippedCount, 1);
+  assert.ok(!b.items.some((i) => i.id === 'cat_gift'), '그 카테고리는 아예 안 뜬다');
+});
+
+test('예산에서 뺀 건은 분석 제외분으로 또 세지 않는다', () => {
+  const transactions = [
+    { id: 'a', type: 'expense', amount: 30_000, occurredAt: '2026-09-10T10:00:00', categoryId: 'cat_cafe' },
+    { id: 'b', type: 'expense', amount: 20_000, occurredAt: '2026-09-11T10:00:00',
+      categoryId: 'cat_cafe', excludeFromBudget: true },
+  ];
+  const b = breakdown(monthSpending({ transactions }, '2026-09'), []);
+  assert.equal(b.skipped, 0, '총액에도 없던 건이라 "뺐다"고 말할 게 아니다');
+  assert.equal(b.total, 30_000);
+});

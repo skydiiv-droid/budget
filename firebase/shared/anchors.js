@@ -41,31 +41,44 @@ export function cardCheck(data = {}) {
   const cardOf = (a) => accounts.find((x) => x.name === a.cardName)
     || accounts.find((x) => alive(x) && isCard(x) && x.issuer === a.issuer);
 
-  const latest = new Map();
+  // 묶음마다 문자를 **다 모은다.** 제일 나중 것만 보면 얼마나 벌어졌는지는
+  // 알아도 **언제부터** 벌어졌는지는 모른다. 그걸 알아야 카드사 앱에서
+  // 어디를 봐야 할지 안다.
+  const byKey = new Map();
   for (const a of anchors) {
     if (a.kind !== 'cumulative' || a.reported == null) continue;
     const card = cardOf(a);
     const key = card ? (card.statementGroupId || card.id) : (a.cardName || a.issuer || '');
     if (!key) continue;
-    const cur = latest.get(key);
-    if (!cur || String(a.at) > String(cur.anchor.at)) latest.set(key, { anchor: a, card });
+    if (!byKey.has(key)) byKey.set(key, { card, list: [] });
+    byKey.get(key).list.push(a);
+  }
+
+  const latest = new Map();
+  for (const [key, { card, list }] of byKey) {
+    list.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    latest.set(key, { anchor: list[list.length - 1], card, list });
   }
 
   const out = [];
-  for (const [key, { anchor, card }] of latest) {
+  for (const [key, { anchor, card, list }] of latest) {
     const account = card || null;
     const group = account ? cardGroup(account, accounts) : [];
     const month = monthOf(anchor.at);
 
-    const counted = transactions
+    const mine = transactions
       .filter((t) => t.type === 'expense' && t.status !== 'voided')
-      .filter((t) => monthOf(t.occurredAt) === month)
-      .filter((t) => String(t.occurredAt) <= String(anchor.at))
       .filter((t) => (group.length
         ? inCards(t, group)
-        : (anchor.cardName && t.cardName === anchor.cardName)))
+        : (anchor.cardName && t.cardName === anchor.cardName)));
+
+    /** 그 문자가 찍힌 시각까지 우리가 센 그달 누적. */
+    const countedAt = (at) => mine
+      .filter((t) => monthOf(t.occurredAt) === monthOf(at))
+      .filter((t) => String(t.occurredAt) <= String(at))
       .reduce((s, t) => s + num(t.amount), 0);
 
+    const counted = countedAt(anchor.at);
     const reported = num(anchor.reported);
     const raw = reported - counted;
 
@@ -81,6 +94,8 @@ export function cardCheck(data = {}) {
       accountIds: group.map((c) => c.id),
       name: group.length > 1 ? group.map((c) => c.name).join(' + ') : (account?.name || anchor.cardName || key),
       reported, counted, gap,
+      // 어디서부터 틀어졌나. 카드사 앱에서 볼 구간을 여기로 좁힌다.
+      ...breakPoint(list, countedAt, used),
       // 누적에 얹혀 있던 리볼빙 이월잔액. 0 이면 안 얹혀 있었다는 뜻이다.
       carried: used,
       // 1원까지 맞기를 기대하지 않는다. 앵커보다 늦게 들어온 문자가 섞일 수 있다.
@@ -91,6 +106,38 @@ export function cardCheck(data = {}) {
   }
 
   return out.sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
+}
+
+/**
+ * 언제부터 어긋났나.
+ *
+ * "3만 2천원이 빈다"만으로는 카드사 앱에서 한 달치를 다 훑어야 한다.
+ * 문자는 올 때마다 그 시점의 누적을 찍고 가므로, **맞았던 마지막 문자**와
+ * **처음 틀어진 문자**를 찾으면 그 사이만 보면 된다.
+ *
+ *   9/17 14:20  누적 523,350  우리도 523,350   ← 여기까진 맞았다
+ *   9/18 10:20  누적 556,250  우리는 523,350   ← 여기서 틀어졌다
+ *   그 사이에 32,900 짜리 결제가 하나 빠졌다.
+ */
+function breakPoint(list = [], countedAt, carried = 0) {
+  const off = (a) => num(a.reported) - countedAt(a.at) - carried;
+
+  let ok = null;      // 맞았던 마지막 문자
+  let bad = null;     // 그 뒤로 처음 틀어진 문자
+  for (const a of list) {
+    if (Math.abs(off(a)) < 1) { ok = a; bad = null; continue; }
+    if (!bad) bad = a;
+  }
+  if (!bad) return { since: null, lastOk: null, window: 0 };
+
+  return {
+    // 여기서부터 틀어졌다
+    since: { at: bad.at, reported: num(bad.reported), counted: countedAt(bad.at), gap: off(bad) },
+    // 여기까진 맞았다. 없으면 처음부터 안 맞았다는 뜻이다.
+    lastOk: ok ? { at: ok.at, reported: num(ok.reported), counted: countedAt(ok.at) } : null,
+    // 사이에 낀 문자 수. 0 이면 두 문자가 바로 붙어 있다.
+    window: ok ? list.filter((a) => String(a.at) > String(ok.at) && String(a.at) < String(bad.at)).length : 0,
+  };
 }
 
 /**

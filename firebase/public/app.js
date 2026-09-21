@@ -611,7 +611,9 @@ const expenseCats = () => D.categories
   .filter((c) => c.kind === 'expense' && !c.hidden).sort(byOrder);
 const mainCats = () => expenseCats().filter((c) => !c.parentId);
 const subCats = (parentId) => expenseCats().filter((c) => c.parentId === parentId);
-const catName = (id) => D.categories.find((c) => c.id === id)?.name ?? id;
+// 지워졌거나 모르는 칸을 가리키는 거래가 있다. 그때 `cat_gift` 같은 속이름을
+// 그대로 띄우면 쓰는 사람에게는 암호다.
+const catName = (id) => D.categories.find((c) => c.id === id)?.name ?? '미분류';
 const catIcon = (id) => D.categories.find((c) => c.id === id)?.icon ?? '';
 
 /** 내려받는 목록도 두 단계로. 스무 칸을 평평하게 늘어놓으면 고를 수가 없다. */
@@ -963,17 +965,17 @@ function renderTrend(months) {
         ${/* 숫자는 실제로 쓴 만큼의 높이에 붙인다. 옅은 칸 꼭대기에 붙이면
              아직 쓰지도 않은 금액을 쓴 것처럼 읽힌다. */''}
         ${worth(m) ? `<span class="tb-v num" style="bottom:${h + 5}px">${
-          won(Math.round(m.total / 1000))}</span>` : ''}
+          won(Math.round(m.total / 10000))}</span>` : ''}
       </span>
       <span class="tb-l">${esc(m.label)}</span></button>`;
   }
 
   return `<div class="card">
     <div class="row"><span class="lbl grow">월별 지출</span>
-      <span class="muted">단위: 천 원</span></div>
+      <span class="muted">단위: 만 원</span></div>
     <div class="trend" style="--h:${H}px">
       ${limit ? `<div class="tb-limit" style="bottom:${y(limit) + 17}px">
-        <span>예산 <b class="num">${won(Math.round(limit / 1000))}</b></span></div>` : ''}
+        <span>예산 <b class="num">${won(Math.round(limit / 10000))}</b></span></div>` : ''}
       ${bars}
     </div>
     ${months.at(-1).current ? `<div class="muted" style="margin-top:12px">
@@ -1073,7 +1075,7 @@ function renderHistory() {
   const top = b.items[0]?.amount || 1;
   h += `<div class="card">
     <div class="lbl">카테고리별 지출</div>
-    <div class="muted" style="margin:4px 0 6px">상위 카테고리를 누르면 하위가 열립니다.${
+    <div class="muted" style="margin:4px 0 6px">상위 카테고리를 누르면 하위와 내역이 열립니다.${
       limits.withLimit.length ? ' 예산을 설정한 카테고리는 예산 대비로 표시됩니다.' : ''}</div>`;
   for (const it of b.items) {
     const open = histOpen === it.id;
@@ -1104,6 +1106,13 @@ function renderHistory() {
     if (!it.subs.length) {
       h += `<div class="brk-sub"><span class="muted">하위 카테고리 없음</span></div>`;
     }
+    // "식비 127,700" 만 보고는 뭘 줄여야 할지 모른다. 그 안을 열어 준다.
+    h += `<div class="brk-rows">${inCategory(rows, it.id).map(txRow).join('')}</div>`;
+  }
+
+  if (b.skippedCount) {
+    h += `<div class="muted" style="margin-top:12px">분석에서 뺀 <b>${b.skippedCount}건</b>
+      <b class="num">${won(b.skipped)}</b>은 위 합계에 없습니다. 총 지출에는 들어 있습니다.</div>`;
   }
   h += '</div>';
 
@@ -1134,6 +1143,12 @@ function renderHistory() {
  * 쓰는 돈은 성격이 완전히 다른데, 달력으로만 보면 둘 다 그냥 "9월 19일"이다.
  * 이건 시중 가계부가 못 하는 일이다 — 근무표를 모르니까.
  */
+/** 그 큰 갈래에 속한 이 달 거래. 하위까지 다 끌어온다. */
+function inCategory(rows, mainId) {
+  const under = new Set([mainId, ...D.categories.filter((c) => c.parentId === mainId).map((c) => c.id)]);
+  return rows.filter((r) => r.inStats && under.has(r.categoryId || 'cat_unknown'));
+}
+
 function renderShifts(month) {
   const has = Object.keys(D.shifts).some((k) => k.startsWith(month));
   if (!has) {
@@ -1175,10 +1190,12 @@ function txRow(r) {
   const open = editTxn === r.id;
   const cat = r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 미분류';
   const note = [cat, r.cardName, r.counted ? '' : '예산 제외',
+                r.counted && !r.inStats ? '분석 제외' : '',
                 ...(r.tags || []).map((t) => `#${t}`), r.memo].filter(Boolean).join(' · ');
 
-  let h = `<button type="button" class="tx${r.counted ? '' : ' off'}"
-    data-tx="${r.id}" aria-expanded="${open}">
+  let h = `<button type="button" class="tx${r.counted ? '' : ' off'}${
+      r.counted && !r.inStats ? ' nostat' : ''}"
+    data-tx="${r.id}" data-hold="${r.id}" aria-expanded="${open}">
     <span class="grow">
       <span class="tx-name">${esc(r.merchantRaw || '(가맹점 미상)')}</span>
       <span class="muted">${esc(note)}</span></span>
@@ -1470,7 +1487,7 @@ function renderCheck() {
         : `앱에 <b class="num">${won(c.extra)}</b>이 더 집계돼 있습니다.
            취소 건이 반영되지 않았거나 같은 결제가 중복 등록됐을 수 있습니다.`}
         <br><span class="muted">${esc(String(c.at).slice(5, 16).replace('T', ' '))} 문자 기준</span></div>
-      </div>`;
+      ${gapWindow(c)}</div>`;
   }
 
   for (const b of banks) {
@@ -1486,6 +1503,40 @@ function renderCheck() {
         data-syncbal="${b.accountId}:${b.reported}">문자 기준으로 갱신</button>
       <div class="muted" style="margin-top:9px">${esc(String(b.at).slice(5, 16).replace('T', ' '))} 수신 문자 기준입니다.</div></div>`;
   }
+  return h;
+}
+
+/**
+ * 어디를 봐야 하나.
+ *
+ * "32,900원이 빈다"만으로는 카드사 앱에서 한 달치를 다 훑어야 한다. 문자는
+ * 올 때마다 그 시점의 누적을 찍고 가므로, 맞았던 마지막 문자와 처음 틀어진
+ * 문자 사이만 보면 된다. 그 두 시각과 금액을 그대로 적어 준다.
+ */
+function gapWindow(c) {
+  if (!c.since) return '';
+  const when = (at) => esc(String(at).slice(5, 16).replace('T', ' '));
+  const line = (label, at, reported, counted, tone) => `<div class="row" style="padding:6px 0">
+    <span class="grow" style="font-size:12px;color:${tone}">
+      <b>${label}</b><br><span class="num">${when(at)}</span></span>
+    <span style="text-align:right;font-size:11.5px;color:var(--ink2)">
+      카드사 <b class="num">${won(reported)}</b><br>앱 <b class="num">${won(counted)}</b></span></div>`;
+
+  let h = `<div class="hr"></div>
+    <div class="lbl" style="margin-bottom:4px">어디를 보면 되나</div>`;
+  if (c.lastOk) {
+    h += line('여기까지는 맞았습니다', c.lastOk.at, c.lastOk.reported, c.lastOk.counted, 'var(--ink2)');
+  } else {
+    h += `<div class="muted" style="padding:6px 0">받아 둔 문자 중에는 맞는 것이 없습니다.
+      이 달 처음부터 보셔야 합니다.</div>`;
+  }
+  h += line('여기서 어긋났습니다', c.since.at, c.since.reported, c.since.counted, 'var(--warn-mark)');
+
+  const from = c.lastOk ? when(c.lastOk.at) : '이 달 처음';
+  h += `<div class="note warn" style="margin:11px 0 0">
+    카드사 앱에서 <b>${from}</b> 부터 <b>${when(c.since.at)}</b> 사이의 결제를 보세요.
+    그 사이에 <b class="num">${won(Math.abs(c.since.gap))}</b>짜리가 들어 있습니다.${
+      c.window ? `<br><span class="muted">그 사이 문자 ${c.window}통이 더 있습니다.</span>` : ''}</div>`;
   return h;
 }
 
@@ -2688,6 +2739,72 @@ function guard(handler) {
     }
   };
 }
+
+/**
+ * 꾹 눌러 분석에서 빼기.
+ *
+ * 경조사 한 번, 병원비 한 번에 카테고리 그림과 근무별 평균이 통째로
+ * 일그러진다. 그렇다고 **총액에서 빼면 안 된다** — 카드사 누적과 안 맞아
+ * "문자를 놓친 결제"로 떠 버린다. 총액에는 남기고 분석에서만 뺀다.
+ *
+ * 누르면 고치기가 열리므로, 빼는 건 **꾹 누르기**에 둔다. 손가락이 움직이면
+ * 스크롤이지 꾹 누르기가 아니다.
+ */
+const HOLD_MS = 550;
+const HOLD_SLIP = 12;        // 이만큼 넘게 움직이면 스크롤로 본다
+let holdTimer = null;
+let holdAt = null;
+
+function endHold() {
+  clearTimeout(holdTimer);
+  holdTimer = null;
+  holdAt = null;
+}
+
+function startHold(e) {
+  const row = e.target.closest('[data-hold]');
+  if (!row) return;
+  const spot = e.touches ? e.touches[0] : e;
+  holdAt = { x: spot.clientX, y: spot.clientY, id: row.dataset.hold };
+  holdTimer = setTimeout(() => {
+    holdTimer = null;
+    const id = holdAt?.id;
+    holdAt = null;
+    if (id) toggleStats(id);
+  }, HOLD_MS);
+}
+
+function moveHold(e) {
+  if (!holdAt) return;
+  const spot = e.touches ? e.touches[0] : e;
+  if (Math.abs(spot.clientX - holdAt.x) > HOLD_SLIP
+   || Math.abs(spot.clientY - holdAt.y) > HOLD_SLIP) endHold();
+}
+
+addEventListener('touchstart', startHold, { passive: true });
+addEventListener('touchmove', moveHold, { passive: true });
+addEventListener('touchend', endHold);
+addEventListener('touchcancel', endHold);
+addEventListener('mousedown', startHold);
+addEventListener('mousemove', moveHold);
+addEventListener('mouseup', endHold);
+// 꾹 누르면 사파리가 메뉴를 띄운다. 우리 몫이니 막는다.
+addEventListener('contextmenu', (e) => {
+  if (e.target.closest('[data-hold]')) e.preventDefault();
+});
+
+/** 그 줄을 분석에 넣거나 뺀다. 총액은 건드리지 않는다. */
+const toggleStats = guard(async (id) => {
+  const t = D.txns.find((x) => x.id === id);
+  if (!t) return;
+  const off = !t.excludeFromStats;
+  dropOlder();
+  await updateDoc(doc(col('txns'), id), { excludeFromStats: off });
+  await refresh();
+  toast(off
+    ? '카테고리 · 근무 분석에서 뺐습니다 — 총 지출에는 그대로 있습니다'
+    : '분석에 다시 넣었습니다');
+});
 
 document.addEventListener('click', guard(async (e) => {
   const tab = e.target.closest('[data-tab]');

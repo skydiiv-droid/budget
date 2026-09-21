@@ -77,6 +77,9 @@ export function shiftStats(data = {}) {
   const spentOn = new Map();
   for (const t of transactions) {
     if (t.type !== 'expense' || t.status === 'voided' || t.excludeFromBudget) continue;
+    // 경조사 한 번에 나이트 하루 평균이 통째로 뒤집힌다. 총액에는 남기되
+    // 여기서는 뺀다.
+    if (t.excludeFromStats) continue;
     const net = netAmount(t, settlements);
     if (net <= 0) continue;
     const key = shiftDateOf(t.occurredAt);

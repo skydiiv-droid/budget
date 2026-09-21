@@ -259,7 +259,14 @@ export function monthSpending(data = {}, yyyymm, now = new Date()) {
     .filter((t) => t.status !== 'voided' && t.type === 'expense' && inWindow(t.occurredAt, win))
     .map((t) => {
       const net = netAmount(t, settlements);
-      return { ...t, net, counted: !t.excludeFromBudget && net > 0 };
+      return {
+        ...t, net,
+        counted: !t.excludeFromBudget && net > 0,
+        // 총액에는 남기고 **분석에서만** 빼는 건이 있다. 경조사 한 번, 병원비
+        // 한 번에 카테고리 그림과 근무별 평균이 통째로 일그러지는데, 총액에서
+        // 빼 버리면 카드사 누적과 안 맞아 "놓친 결제"로 뜬다.
+        inStats: !t.excludeFromBudget && !t.excludeFromStats && net > 0,
+      };
     })
     .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));
 }
@@ -278,8 +285,11 @@ export function breakdown(rows = [], categories = []) {
   const mains = new Map();
   let total = 0;
 
+  let skipped = 0;
+  let skippedCount = 0;
   for (const r of rows) {
-    if (!r.counted) continue;
+    if (r.counted && !r.inStats) { skipped += r.net; skippedCount += 1; }
+    if (!r.inStats) continue;
     const c = find(r.categoryId);
     const mainId = c ? (c.parentId || c.id) : (r.categoryId || 'cat_unknown');
 
@@ -307,7 +317,8 @@ export function breakdown(rows = [], categories = []) {
     }))
     .sort(bySpend);
 
-  return { total, items };
+  // 분석에서 뺀 건. 카테고리 합이 총 지출과 다른 이유를 말해 줄 수 있어야 한다.
+  return { total, items, skipped, skippedCount };
 }
 
 /**

@@ -243,3 +243,10 @@ th{font-weight:600;color:var(--ink2);white-space:nowrap}
 .offbar{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom) + 58px);
   z-index:40;padding:9px 16px;font-size:12px;line-height:1.5;text-align:center;
   background:var(--warn-dim);color:var(--warn);border-top:1px solid var(--warn-line)}
+
+/* 카테고리를 펼쳤을 때 그 안의 내역 */
+.brk-rows{margin:2px 0 10px;padding:0 4px 0 38px;border-left:2px solid var(--blue-line)}
+.brk-rows .tx{padding:8px 0}
+/* 분석에서 뺀 줄. 총액에는 남아 있으니 지운 것처럼 보이면 안 된다. */
+.tx.nostat .tx-name{opacity:.62}
+.tx.nostat .tx-amt{opacity:.62;text-decoration:line-through}

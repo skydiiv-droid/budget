@@ -36,7 +36,7 @@ if (d.ok && d.nextBill && d.nextBill.daysLeft <= DAYS_AHEAD) {
 // 예산을 다 쓴 날도 알려 준다. 다 쓰고 나서 아는 것보다 낫다.
 if (d.ok && d.budget && d.usedPct >= 100) {
   lines.push(`이번 달 생활비 예산 소진 (${d.usedPct}%)`);
-} else if (d.ok && d.budget && d.projected > d.budget * 1.15 && d.daysLeft > 3) {
+} else if (d.ok && d.budget && d.enoughForPace && d.projected > d.budget * 1.15 && d.daysLeft > 3) {
   lines.push(`현재 속도라면 예산 ${won(d.projected - d.budget)} 초과 예상`);
 }
 

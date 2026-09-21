@@ -672,8 +672,9 @@ function renderHome() {
     h += `<div class="note ${gap > 0 ? 'warn' : 'ok'}" style="margin:12px 0 0">
       지난달 같은 기간보다
       <b class="num">₩${won(Math.abs(gap))}</b> ${gap > 0 ? '더' : '덜'} 지출 (${pct > 0 ? '+' : ''}${pct}%).<br>
-      현재 속도라면 이번 달 <b class="num">₩${won(run.projected)}</b> 예상${
-        budget.limit ? ` — 예산 <b class="num">₩${won(Math.abs(run.projected - budget.limit))}</b> ${run.projected > budget.limit ? '초과' : '미만'}` : ''}.</div>`;
+      ${/* 달 초 며칠치로 한 달을 점치면 숫자가 요동친다. 그때는 말하지 않는다. */''}
+      ${run.enough ? `현재 속도라면 이번 달 <b class="num">₩${won(run.projected)}</b> 예상${
+        budget.limit ? ` — 예산 <b class="num">₩${won(Math.abs(run.projected - budget.limit))}</b> ${run.projected > budget.limit ? '초과' : '미만'}` : ''}.` : ''}</div>`;
   } else if (!budget.limit) {
     h += `<div class="muted" style="margin-top:4px">설정에서 생활비 예산을 등록하면
       <b>오늘 사용 가능액</b>이 표시됩니다.</div>`;
@@ -896,6 +897,8 @@ function renderShift(goal, planned) {
 
   // 예산은 생활비에만 걸린 것이므로 견줄 것도 생활비 쪽 속도여야 한다.
   const run = pace(b.spent, D.ledger.month, D.settings.cycleStartDay);
+  // 이틀치로 "16일 당겨집니다"라고 말하면 안 된다. 달의 3분의 1은 지나야 한다.
+  if (!run.enough) return '';
   const saved = b.limit - run.projected;
   const s = paceShift(goal.remaining, planned.available, saved);
   if (!s) return '';

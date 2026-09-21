@@ -430,3 +430,19 @@ test('말할 것이 없으면 아무 말도 하지 않는다', () => {
   assert.equal(paceShift(3_000_000, -100_000, -50_000), null, '원래도 못 갚고 있다');
   assert.equal(paceShift(3_000_000, 100_000_000, 10), null, '하루도 안 당겨지면 말하지 않는다');
 });
+
+test('달 초 며칠로 한 달을 점치지 않는다', () => {
+  const at = (day) => pace(3_000, '2026-09', 1, new Date(`2026-09-${String(day).padStart(2, '0')}T09:00:00`));
+  assert.equal(at(2).enough, false, '이틀치로는 말하지 않는다');
+  assert.equal(at(9).enough, false);
+  assert.equal(at(11).enough, true, '열흘이 지나면 말할 만하다');
+  assert.equal(at(25).enough, true);
+  // 숫자 자체는 늘 내준다. 말할지 말지는 보는 쪽이 정한다.
+  assert.ok(at(2).projected > 0);
+});
+
+test('달이 시작도 안 했으면 아무것도 없다', () => {
+  const r = pace(0, '2026-10', 1, new Date('2026-09-20T09:00:00'));
+  assert.equal(r.enough, false);
+  assert.equal(r.projected, 0);
+});

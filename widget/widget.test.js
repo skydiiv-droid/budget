@@ -20,6 +20,7 @@ const DATA = {
   ok: true, month: '2026-09',
   spent: 581_350, budget: 900_000, perDay: 33_565, daysLeft: 10,
   usedPct: 63, projected: 894_306, dayOf: 20, days: 30, dailyAvg: 29_068,
+  enoughForPace: true,          // 20/30일 — 예상을 걸 만큼은 지났다
   lastMonthSameSpan: 395_000, debt: 3_580_000,
   goalPct: 15, goalName: '빚 정리',
   nextBill: { name: '현대 이마트Plus', total: 820_605, payAt: '2026-10-12', daysLeft: 22 },
@@ -157,4 +158,16 @@ test('막대 바탕도 테마를 따라간다', async () => {
   walk(root);
   assert.ok(bars.length >= 2, '막대를 못 찾았다 — 검사가 헛돌고 있다');
   assert.ok(bars.every((b) => b.dynamic), '트랙이 밝은 회색 하나면 다크에서 허옇게 뜬다');
+});
+
+test('달 초에는 예상을 걸지 않는다', async () => {
+  // 이틀치로 한 달을 점치면 숫자가 요동친다. 위젯이 그걸 그대로 띄우면
+  // 매달 초마다 엉뚱한 숫자를 보게 된다.
+  const out = await draw('large',
+    { ...DATA, dayOf: 2, spent: 3_000, usedPct: 0, projected: 45_000, enoughForPace: false });
+  assert.match(out, /이번 달 예상/, '자리는 남겨 둔다');
+  assert.match(out, /아직 이르다/);
+  assert.ok(!out.includes('₩45,000'), '점친 숫자를 띄우지 않는다');
+  assert.ok(!out.includes('미만 예상') && !out.includes('초과 예상'),
+    '예산에 견주는 말도 하지 않는다');
 });

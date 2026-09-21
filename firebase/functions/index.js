@@ -324,6 +324,8 @@ export const summary = onRequest(
         daysLeft: L.budget.daysLeft,
         usedPct: L.budget.usedPct,
         projected: run.projected,
+        // 달 초 며칠치로 한 달을 점치면 요동친다. 위젯·알림이 이걸 보고 말을 고른다.
+        enoughForPace: run.enough,
         dayOf: run.dayOf,
         days: run.days,
         // 하루 평균은 "오늘 쓸 수 있는 돈"(perDay)과 다르다. 이건 이미 쓴 것을

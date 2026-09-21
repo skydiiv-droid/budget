@@ -153,7 +153,7 @@ function small(w, d) {
     w.addSpacer(5);
     text(w, `${d.usedPct}% · ${d.daysLeft}일 남음`, { size: 11, color: MUTED });
   } else {
-    text(w, `예상 ${short(d.projected)}`, { size: 11, color: MUTED });
+    if (d.enoughForPace) text(w, `예상 ${short(d.projected)}`, { size: 11, color: MUTED });
   }
   if (d.waiting) {
     w.addSpacer(4);
@@ -227,13 +227,18 @@ function large(w, d) {
   w.addSpacer(12);
   row(w, '하루 평균', won(d.dailyAvg || 0));
   w.addSpacer(6);
-  const end = d.budget ? (d.projected > d.budget ? WARN : UP) : INK;
-  row(w, '이번 달 예상', won(d.projected || 0), { color: end });
-  if (d.budget) {
-    w.addSpacer(2);
-    const gap = (d.projected || 0) - d.budget;
-    text(w, gap > 0 ? `예산 ${won(gap)} 초과 예상` : `예산 ${won(-gap)} 미만 예상`,
-      { size: 11, color: gap > 0 ? WARN : MUTED });
+  // 달 초 며칠치로 한 달을 점치면 숫자가 요동친다. 그때는 예상을 걸지 않는다.
+  if (d.enoughForPace) {
+    const end = d.budget ? (d.projected > d.budget ? WARN : UP) : INK;
+    row(w, '이번 달 예상', won(d.projected || 0), { color: end });
+    if (d.budget) {
+      w.addSpacer(2);
+      const gap = (d.projected || 0) - d.budget;
+      text(w, gap > 0 ? `예산 ${won(gap)} 초과 예상` : `예산 ${won(-gap)} 미만 예상`,
+        { size: 11, color: gap > 0 ? WARN : MUTED });
+    }
+  } else {
+    row(w, '이번 달 예상', '아직 이르다', { color: MUTED });
   }
 
   // ── 어디에 썼나 ─────────────────────────────────────────

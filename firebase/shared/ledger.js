@@ -350,11 +350,17 @@ export function pace(spentSoFar, yyyymm, cycleStartDay, now = new Date()) {
   const win = monthWindow(yyyymm || monthKey(now), cycleStartDay);
   const whole = win.end - win.start;
   const gone = Math.min(Math.max(now - win.start, 0), whole);
-  if (gone <= 0) return { projected: 0, dayOf: 0, days: Math.round(whole / 86400000) };
+  if (gone <= 0) {
+    return { projected: 0, dayOf: 0, days: Math.round(whole / 86400000), enough: false };
+  }
   return {
     projected: Math.round(Number(spentSoFar || 0) * (whole / gone)),
     dayOf: Math.ceil(gone / 86400000),
     days: Math.round(whole / 86400000),
+    // 며칠치로 한 달을 점치면 숫자가 요동친다 — 큰 장 한 번에 배가 되고,
+    // 이틀째에 3천원 썼으면 "한 달에 4만원"이 된다. 3분의 1은 지나야
+    // 예상이라고 부를 만하다. 그 전에는 **말하지 않는다.**
+    enough: gone * 3 >= whole,
   };
 }
 

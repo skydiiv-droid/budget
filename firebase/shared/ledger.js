@@ -27,6 +27,28 @@ import { prevBusinessDay } from './holidays.js';
  * 경계가 해마다 흔들리면 지난달과 견줄 수가 없다.
  */
 /**
+ * 얼마나 거슬러 올라가 읽어 둘 것인가.
+ *
+ * 다 읽어 오면 열 때마다 몇 천 건이 딸려 온다. 안 읽어 오면 그만큼이 화면에서
+ * 그냥 **없는 것**이 된다 — 검색해도 안 나오고 그래프의 옛 달이 0원이 된다.
+ * 없는 게 아니라 안 읽어 온 것인데 화면은 둘을 구분해 주지 않는다.
+ *
+ * 그래서 기본 화면이 쓰는 만큼만 읽는다. 달마다 쓴 돈 그래프가 여섯 달,
+ * 고정지출 탐지가 넉 달, 지난달 대비가 두 달이니 **열세 달**이면 다 덮는다.
+ * 그보다 옛 것이 있으면 "안 읽어 왔다"고 말하고, 필요할 때 마저 읽는다.
+ */
+export const WINDOW_MONTHS = 13;
+
+export function windowStart(now = new Date(), months = WINDOW_MONTHS) {
+  const d = new Date(now.getFullYear(), now.getMonth() - (Math.max(1, months) - 1), 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01T00:00:00`;
+}
+
+/** 읽어 온 창보다 옛 것이 남아 있는가. */
+export const hasOlderThan = (oldest, from) =>
+  Boolean(oldest && from && String(oldest) < String(from));
+
+/**
  * 한 달에 나가는 고정비.
  *
  * 연 1회짜리(자동차보험 · 연회비)는 열두 달로 나눠 얹는다. 나가는 달에만

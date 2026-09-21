@@ -12,11 +12,11 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
   getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc,
-  deleteDoc, writeBatch, query, orderBy, limit,
+  deleteDoc, writeBatch, query, orderBy, limit, where,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
-import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMonth, pace }
-  from './shared/ledger.js';
+import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMonth, pace,
+         windowStart, hasOlderThan } from './shared/ledger.js';
 import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf, matchCard } from './shared/accounts.js';
 import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
 import { trend, categoryBudgets, monthlyFixed } from './shared/ledger.js';
@@ -50,6 +50,18 @@ const openMain = new Map();
 let histQuery = '';
 let fixPick = null;      // '출금됐습니다' 를 누른 고정지출
 let dutyFound = null;    // 근무표 앱에서 방금 읽어 온 것
+
+/**
+ * 거래를 어디까지 읽어 왔나.
+ *
+ * 처음엔 최근 500건만 읽었다. 몇 달 지나면 그 밖의 거래가 **아무 말 없이**
+ * 화면에서 사라진다 — 검색해도 없다고 나오고 그래프의 옛 달이 0원이 된다.
+ * 지워진 것과 안 읽어 온 것이 똑같아 보이는 게 제일 나쁘다.
+ *
+ * 이제 날짜로 끊고, 그보다 옛 것이 있으면 있다고 말한다. 다 필요한 일
+ * (검색 · 내보내기 · 옛 달 보기)에서는 마저 읽는다.
+ */
+let wantAll = false;
 let histMonth = null;
 let histOpen = null;
 let editTxn = null;
@@ -369,14 +381,45 @@ async function migrateDebts() {
   await commitAll([...ops, ...old.map((d) => (b) => b.delete(doc(col('debts'), d.id)))]);
 }
 
+/**
+ * 나머지 거래까지 마저 읽는다.
+ *
+ * 검색 · 내보내기 · 옛 달 보기는 다 있어야 맞는 답이 나온다. 한 번 읽으면
+ * 이 세션 동안은 계속 다 들고 간다 — 다시 반쪽이 되면 또 조용히 틀린다.
+ */
+async function loadAll(why) {
+  if (wantAll) return false;
+  wantAll = true;
+  toast(why ? `${why} — 지난 내역을 마저 불러옵니다…` : '지난 내역을 마저 불러옵니다…');
+  await refresh();
+  return true;
+}
+
+/** 안 읽어 온 옛 내역이 있다고 알리는 줄. */
+function olderNote(where) {
+  if (!D.hasOlder) return '';
+  const [y, m] = String(D.from).split('-');
+  const since = `${Number(y)}년 ${Number(m)}월`;
+  return `<div class="note warn" style="margin:12px 0 0">
+    <b>${since} 이전 내역은 아직 불러오지 않았습니다.</b><br>
+    ${esc(where)}
+    <button type="button" class="act ghost small" style="margin-top:9px"
+      id="loadAll">전체 불러오기</button></div>`;
+}
+
 async function refresh() {
+  // 다 읽기로 한 적이 없으면 기본 화면이 쓰는 만큼만 읽는다.
+  const from = wantAll ? '' : windowStart(new Date());
+  const txnQuery = from
+    ? query(col('txns'), orderBy('occurredAt', 'desc'), where('occurredAt', '>=', from))
+    : query(col('txns'), orderBy('occurredAt', 'desc'));
+
   const [categories, rules, merchants, accounts, recurring, settlements,
-         txns, raw, settingsSnap, shiftSnap, anchors] =
+         txns, raw, settingsSnap, shiftSnap, anchors, oldest] =
     await Promise.all([
       readAll('categories'), readAll('rules'), readAll('merchants'), readAll('accounts'),
       readAll('recurring'), readAll('settlements'),
-      getDocs(query(col('txns'), orderBy('occurredAt', 'desc'), limit(500)))
-        .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      getDocs(txnQuery).then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }))),
       getDocs(query(col('raw'), orderBy('receivedAt', 'desc'), limit(100)))
         .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }))),
       getDoc(doc(db, 'users', uid, 'meta', 'settings')),
@@ -384,6 +427,12 @@ async function refresh() {
       getDocs(query(col('anchors'), orderBy('at', 'desc'), limit(120)))
         .then((x) => x.docs.map((d) => ({ id: d.id, ...d.data() })))
         .catch(() => []),
+      // 제일 오래된 거래 한 건. 창 밖에 뭐가 남았는지 알려면 이것만 있으면 된다.
+      from
+        ? getDocs(query(col('txns'), orderBy('occurredAt', 'asc'), limit(1)))
+            .then((x) => x.docs[0]?.data()?.occurredAt || '')
+            .catch(() => '')
+        : Promise.resolve(''),
     ]);
 
   const settings = settingsSnap.exists() ? settingsSnap.data() : { ...SETTINGS };
@@ -391,7 +440,8 @@ async function refresh() {
   const ingest = ingestSnap?.exists() ? ingestSnap.data() : {};
   const shifts = shiftSnap.exists() ? (shiftSnap.data().days || {}) : {};
   D = { categories, rules, merchants, accounts, recurring, settlements,
-        txns, raw, settings, ingest, shifts, anchors };
+        txns, raw, settings, ingest, shifts, anchors,
+        from, oldest, hasOlder: hasOlderThan(oldest, from) };
   D.ledger = ledger({ transactions: txns, recurring, settlements, accounts,
                       categories, raw, settings });
 
@@ -834,13 +884,15 @@ function renderHistory() {
     let f = '';
     if (!hits.length) {
       f += `<div class="card"><div class="empty">「${esc(histQuery)}」 검색 결과가 없습니다.<br>
-        이름 일부만 입력해도 됩니다.</div></div>`;
+        이름 일부만 입력해도 됩니다.</div>${
+        olderNote('찾는 내역이 그 안에 있을 수 있습니다.')}</div>`;
     } else {
       f += `<div class="card">
         <div class="row"><span class="lbl grow">검색 결과 ${hits.length}건</span>
           <span class="num" style="font-size:15px;font-weight:700">${won(total)}</span></div></div>
         <div class="card" style="padding:4px 16px">${hits.slice(0, 80).map(txRow).join('')}</div>`;
       if (hits.length > 80) f += `<div class="muted" style="text-align:center;margin-top:8px">최근 80건만 표시합니다</div>`;
+      f += olderNote('검색은 불러온 내역에서만 찾습니다.');
     }
     body.innerHTML = f;
     return;
@@ -938,6 +990,7 @@ function renderHistory() {
     days.get(key).push(r);
   }
 
+  h += olderNote('월별 지출 그래프와 지난달 대비도 불러온 만큼만 셉니다.');
   h += `<div class="lbl" style="margin:20px 2px 0">지출 내역 · 누르면 수정</div>`;
   for (const [key, list] of days) {
     const d = new Date(`${key}T00:00:00`);
@@ -2286,6 +2339,9 @@ async function deleteCategory(id) {
   const kids = D.categories.filter((c) => c.parentId === id && !c.hidden);
   if (kids.length) return toast(`하위 ${kids.length}개를 먼저 옮기거나 삭제하세요`);
 
+  // 안 읽어 온 거래가 이 카테고리를 쓰고 있으면 지워진 칸을 가리킨 채 남는다.
+  if (D.hasOlder) await loadAll('카테고리 삭제');
+
   const to = cat.parentId && D.categories.some((c) => c.id === cat.parentId)
     ? cat.parentId : 'cat_unknown';
 
@@ -2435,7 +2491,9 @@ async function saveDoc(kind, values) {
  * 주소가 살아 있다는 뜻이다. 주소를 손으로 옮겨 적기 전에 확인하는 게 낫다.
  */
 /** 내보내기. 파일로 떨어뜨려 놓으면 어디서든 연다. */
-function exportCsv() {
+async function exportCsv() {
+  // 반쪽짜리 파일을 내보내면 받은 사람은 그게 전부인 줄 안다.
+  if (D.hasOlder) await loadAll('내보내기');
   const csv = toCSV(D.txns, { categories: D.categories, accounts: D.accounts });
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
@@ -2504,11 +2562,15 @@ document.addEventListener('click', guard(async (e) => {
     return;
   }
 
+  if (e.target.id === 'loadAll') return loadAll();
+
   const month = e.target.closest('[data-month]');
   if (month) {
     histMonth = shiftMonth(histMonth || D.ledger.month, Number(month.dataset.month));
     histOpen = null;
     editTxn = null;
+    // 읽어 온 창 밖으로 넘어가면 그 달은 무조건 0원으로 보인다. 그건 답이 아니다.
+    if (D.hasOlder && `${histMonth}-01T00:00:00` < String(D.from)) await loadAll('지난 달 보기');
     renderHistory();
     window.scrollTo(0, 0);
     return;

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ledger, matchRecurring, monthSpending, breakdown, shiftMonth, monthWindow,
+import { windowStart, hasOlderThan, WINDOW_MONTHS,
+         ledger, matchRecurring, monthSpending, breakdown, shiftMonth, monthWindow,
          sameSpanLastMonth, pace, trend, fixedDueIn, topSpending } from './ledger.js';
 
 const NOW = new Date(2026, 8, 20, 12, 0);   // 2026-09-20
@@ -369,4 +370,29 @@ test('제일 많이 쓴 갈래 몇 개만 자른다', () => {
 
 test('쓴 게 없으면 빈 목록이다', () => {
   assert.deepEqual(topSpending([], CATS, 3), []);
+});
+
+test('읽어 둘 창은 기본 화면이 쓰는 만큼이다', () => {
+  // 그래프 여섯 달 · 탐지 넉 달 · 지난달 대비 두 달을 다 덮어야 한다
+  assert.equal(windowStart(new Date('2026-09-21T10:00:00')), '2025-09-01T00:00:00');
+  assert.equal(windowStart(new Date('2026-01-05T10:00:00')), '2025-01-01T00:00:00');
+  // 달 경계를 넘을 때 하루라도 밀리면 그 달이 통째로 빈다
+  assert.equal(windowStart(new Date('2026-03-01T00:00:01')), '2025-03-01T00:00:00');
+  assert.equal(windowStart(new Date('2026-12-31T23:59:59')), '2025-12-01T00:00:00');
+});
+
+test('창은 늘릴 수 있고 한 달 밑으로는 안 내려간다', () => {
+  assert.equal(windowStart(new Date('2026-09-21'), 2), '2026-08-01T00:00:00');
+  assert.equal(windowStart(new Date('2026-09-21'), 1), '2026-09-01T00:00:00');
+  assert.equal(windowStart(new Date('2026-09-21'), 0), '2026-09-01T00:00:00');
+});
+
+test('창보다 옛 것이 남아 있는지 안다', () => {
+  const from = '2025-09-01T00:00:00';
+  assert.equal(hasOlderThan('2025-08-31T23:00:00', from), true);
+  assert.equal(hasOlderThan('2025-09-01T00:00:00', from), false);
+  assert.equal(hasOlderThan('2026-01-02T00:00:00', from), false);
+  // 창이 없다 = 다 읽어 왔다
+  assert.equal(hasOlderThan('2020-01-01T00:00:00', ''), false);
+  assert.equal(hasOlderThan('', from), false, '거래가 하나도 없으면 옛것도 없다');
 });

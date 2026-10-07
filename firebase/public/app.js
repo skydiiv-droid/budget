@@ -30,7 +30,8 @@ import { findDuties, dutyPeople, dutiesOf, toShifts, dutyEndpoint, monthInUrl }
 import { cardCheck, balanceCheck } from './shared/anchors.js';
 // candidates 는 취소 상계에서 쓰는 지역 변수와 이름이 겹친다. 갈아 두면
 // 한쪽을 고칠 때 다른 쪽이 조용히 가려지는 일이 없다.
-import { fixedStatus, lateFixed, parseKeywords, candidates as fixedCandidates }
+import { fixedStatus, lateFixed, parseKeywords, learnKeyword, knownKeyword,
+         candidates as fixedCandidates }
   from './shared/fixed.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
@@ -1701,7 +1702,7 @@ function renderFixed() {
     <div class="field"><label>문자에서 찾을 단어</label>
       <input name="keywords" placeholder="NETFLIX, 넷플릭스">
       <div class="muted" style="margin-top:6px">문자에 찍히는 이름이 위 이름과 다를 때 사용합니다.
-        쉼표로 여러 개를 넣을 수 있습니다.</div></div>
+        쉼표로 여러 개를 넣을 수 있습니다. 한 글자는 아무 문자에나 걸려 쓰지 않습니다.</div></div>
     <div class="field"><label>카테고리</label>
       <select name="categoryId">${catOptions()}</select></div>
     <button type="submit" class="act primary" style="width:100%">등록</button></form>`;
@@ -1791,6 +1792,9 @@ function fixedNote(r, st) {
     const byHand = st.txn.recurringId === r.id;
     bits.push(`<b style="color:var(--ink2)">${DATE_SHORT(at)} 출금 확인</b>${
       byHand ? ` — <button type="button" class="linkbtn" data-unlink="${st.txn.id}">연결 풀기</button>` : ''}`);
+    // 이름이 일부만 맞아 금액으로 받친 건. 그렇게 잡았다고 말해 줘야
+    // 틀렸을 때 사람이 알아본다.
+    if (st.loose) bits.push(`이름 일부만 일치 — <b>${esc(st.txn.merchantRaw || '가맹점 미상')}</b>`);
     if (st.diff) {
       bits.push(`등록액보다 <b class="num" style="color:var(--warn-mark)">${
         won(Math.abs(st.diff))}</b> ${st.diff > 0 ? '많음' : '적음'}`);
@@ -2918,12 +2922,11 @@ document.addEventListener('click', guard(async (e) => {
     if (!r || !t) return;
 
     // 이름이 안 맞아서 못 찾은 것이라면 이번 한 번으로 끝낼 일이 아니다.
-    // 다음 달에도 같은 이름으로 올 테니 키워드로 배워 둔다.
+    // 다음 달에도 같은 이름으로 올 테니 키워드로 배워 둔다. 승인번호처럼
+    // 매달 바뀌는 꼬리는 떼고 배운다 — 그대로 배우면 다음 달에 또 안 맞는다.
     const words = parseKeywords(r.keywords);
-    const learn = normalizeMerchant(t.merchantRaw);
-    const known = learn && (normalizeMerchant(r.name) && learn.includes(normalizeMerchant(r.name))
-      || words.some((w) => learn.includes(normalizeMerchant(w))));
-    const next = !known && learn ? [...words, t.merchantRaw.trim()] : words;
+    const learn = knownKeyword(r, t.merchantRaw) ? '' : learnKeyword(t.merchantRaw);
+    const next = learn ? [...words, learn] : words;
 
     const batch = writeBatch(db);
     dropOlder();
@@ -2933,8 +2936,8 @@ document.addEventListener('click', guard(async (e) => {
 
     fixPick = null;
     await refresh();
-    return toast(next !== words
-      ? `${r.name} 에 이었습니다 — 「${t.merchantRaw}」를 찾을 단어로 등록했습니다`
+    return toast(learn
+      ? `${r.name} 에 이었습니다 — 「${learn}」를 찾을 단어로 등록했습니다`
       : `${r.name} 에 이었습니다`);
   }
 

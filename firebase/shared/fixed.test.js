@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseKeywords, hitsRecurring, dueDateOf, fixedStatus, lateFixed,
-         candidates, liveRecurring } from './fixed.js';
+         candidates, liveRecurring, learnKeyword, knownKeyword } from './fixed.js';
 
 const netflix = {
   id: 'r1', name: '넷플릭스', expectedAmount: 17_000, dayOfMonth: 15, period: 'monthly',
@@ -230,4 +230,106 @@ test('고정지출이 사라진 뒤 남은 연결은 어느 것에도 안 붙는
   const row = fixedStatus({ recurring: [netflix], transactions: [orphan] },
     '2026-09', new Date('2026-09-20T09:00:00'))[0];
   assert.equal(row.state, 'late', '들어왔는데도 안 들어온 것으로 센다');
+});
+
+// ── 고정지출과 거래를 맞추는 힘 ──────────────────────────
+// 아래 것들은 모두 한 번씩 놓쳤던 자리다.
+
+test('적어 둔 이름의 대소문자까지 맞아야 할 이유는 없다', () => {
+  // "Netflix" 로 적어 두고 문자에는 "NETFLIX.COM" 이 찍힌다.
+  const r = { ...netflix, name: 'Netflix' };
+  assert.equal(hitsRecurring({ merchantRaw: 'NETFLIX.COM', amount: 17_000 }, r), true);
+  assert.equal(hitsRecurring({ merchantRaw: 'netflix korea', amount: 17_000 }, r), true);
+});
+
+test('가맹점을 엉뚱하게 끊어 읽었어도 본문에 이름이 있으면 찾는다', () => {
+  // 은행 출금 문자는 가맹점 자리가 "우리은행"으로 잡히기 쉽다.
+  const r = { id: 'r5', name: '관리비', expectedAmount: 123_000, dayOfMonth: 25 };
+  const txn = { merchantRaw: '우리은행', amount: 131_450,
+    rawText: '[우리은행] 09/25 10:02 출금 131,450원 관리비 잔액 412,300원' };
+  assert.equal(hitsRecurring(txn, r), true);
+});
+
+test('받쳐 줄 금액이 없으면 본문만 보고 짐작하지 않는다', () => {
+  // 금액이 달마다 다르다고 해 두면 견줄 것이 없다. 그때까지 짐작하면
+  // 안 들어온 것을 안 들어왔다고 말할 수 없게 된다.
+  const r = { id: 'r5', name: '관리비', expectedAmount: 123_000, dayOfMonth: 25, amountVaries: true };
+  const txn = { merchantRaw: '우리은행', amount: 131_450,
+    rawText: '[우리은행] 09/25 출금 131,450원 관리비' };
+  assert.equal(hitsRecurring(txn, r), false);
+});
+
+test('적어 둔 이름이 문자에 찍힌 것보다 길어도 금액이 받쳐 주면 찾는다', () => {
+  const r = { id: 'r6', name: '유튜브프리미엄', expectedAmount: 14_900, dayOfMonth: 6 };
+  assert.equal(hitsRecurring({ merchantRaw: '유튜브', amount: 14_900 }, r), true);
+  // 금액이 영 다르면 같은 건으로 보지 않는다
+  assert.equal(hitsRecurring({ merchantRaw: '유튜브', amount: 89_000 }, r), false);
+});
+
+test('한 글자 키워드는 아무 문자에나 걸리므로 쓰지 않는다', () => {
+  const r = { ...netflix, keywords: '커' };
+  assert.equal(hitsRecurring({ merchantRaw: '컴포즈커피', amount: 4_500 }, r), false);
+});
+
+test('한 거래가 두 고정지출을 메우지는 못한다', () => {
+  // 둘 다 "들어왔다"가 되면 진짜 안 들어온 쪽이 조용히 묻힌다.
+  const data = {
+    recurring: [
+      { id: 'a', name: '넷플릭스', expectedAmount: 17_000, dayOfMonth: 15 },
+      { id: 'b', name: '넷플릭스', expectedAmount: 5_500, dayOfMonth: 15 },
+    ],
+    transactions: [{ id: 't1', type: 'expense', amount: 17_000,
+      occurredAt: '2026-09-15T04:10:00', merchantRaw: '넷플릭스' }],
+  };
+  const rows = fixedStatus(data, '2026-09', new Date('2026-09-20T09:00:00'));
+  assert.deepEqual(rows.map((r) => r.state), ['paid', 'late']);
+  assert.equal(rows[0].txn.id, 't1');
+});
+
+test('여럿이 걸리면 금액이 가까운 건을 고른다', () => {
+  // 날짜만 보면 먼저 찍힌 1,000원짜리를 집는다. 그것은 넷플릭스 결제가 아니다.
+  const data = {
+    recurring: [netflix],
+    transactions: [
+      { id: 'tiny', type: 'expense', amount: 1_000,
+        occurredAt: '2026-09-14T04:00:00', merchantRaw: '넷플릭스' },
+      { id: 'real', type: 'expense', amount: 17_000,
+        occurredAt: '2026-09-15T04:10:00', merchantRaw: '넷플릭스' },
+    ],
+  };
+  const row = fixedStatus(data, '2026-09', new Date('2026-09-20T09:00:00'))[0];
+  assert.equal(row.txn.id, 'real');
+  assert.equal(row.diff, 0);
+});
+
+test('적금 자동이체도 "출금됐다"고 할 때 고를 수 있다', () => {
+  // 지출만 보여 주면 저축으로 돌린 자동이체는 목록에 아예 안 뜬다.
+  const save = { id: 'r7', name: '청약', expectedAmount: 100_000, dayOfMonth: 25 };
+  const txns = [{ id: 'tr1', type: 'transfer', amount: 100_000,
+    occurredAt: '2026-09-25T04:00:00', merchantRaw: '주택청약' }];
+  assert.deepEqual(candidates(save, txns, '2026-09').map((t) => t.id), ['tr1']);
+});
+
+test('이름이나 키워드가 걸리는 건을 위로 올린다', () => {
+  const txns = [
+    { id: 'other', type: 'expense', amount: 17_000, occurredAt: '2026-09-15T09:00:00', merchantRaw: '편의점' },
+    { id: 'nf', type: 'expense', amount: 17_000, occurredAt: '2026-09-18T09:00:00', merchantRaw: '넷플릭스' },
+  ];
+  assert.equal(candidates(netflix, txns, '2026-09')[0].id, 'nf');
+});
+
+test('배울 키워드에서 매달 바뀌는 꼬리는 뗀다', () => {
+  // "넷플릭스서비시스 0915" 를 그대로 배우면 다음 달에는 안 맞는다.
+  assert.equal(learnKeyword('넷플릭스서비시스 0915'), '넷플릭스서비시스');
+  assert.equal(learnKeyword('GOOGLE YOUTUBEPREMIUM'), 'GOOGLE YOUTUBEPREMIUM');
+  // 떼고 나면 너무 짧아지는 것은 그대로 둔다 (GS25 → GS 는 아무 데나 걸린다)
+  assert.equal(learnKeyword('GS25'), 'GS25');
+  assert.equal(learnKeyword(''), '');
+  assert.equal(learnKeyword(null), '');
+});
+
+test('이미 잡히는 이름은 다시 배우지 않는다', () => {
+  assert.equal(knownKeyword(netflix, '넷플릭스코리아'), true);
+  assert.equal(knownKeyword({ ...netflix, keywords: 'netflix' }, 'NETFLIX.COM 0915'), true);
+  assert.equal(knownKeyword(netflix, 'NF KOREA'), false);
 });

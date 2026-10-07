@@ -11,7 +11,7 @@
  * 구독은 등록해 둔 항목이기도 하고 카드 승인 문자로도 들어오기 때문이다.
  */
 import { normalizeMerchant } from './parse.js';
-import { hitsRecurring, liveRecurring } from './fixed.js';
+import { recurringMatch, liveRecurring } from './fixed.js';
 import { netAmount } from './settlement.js';
 import { rollup } from './accounts.js';
 import { prevBusinessDay } from './holidays.js';
@@ -124,11 +124,18 @@ const inWindow = (iso, win) => {
 /**
  * 거래가 등록해 둔 고정지출 중 하나인지 본다.
  *
- * 이름·키워드·결제 수단으로 가른다. 판단은 한 곳(fixed.js)에만 두어야
+ * 이름·키워드·결제 수단·금액으로 가른다. 판단은 한 곳(fixed.js)에만 두어야
  * 고정비 화면이 "들어왔다"고 하는데 여기서는 변동비로 세는 일이 없다.
+ * 여럿이 걸리면 가장 잘 맞는 것을 준다.
  */
 export function matchRecurring(txn, recurring = [], accounts = []) {
-  return recurring.find((r) => hitsRecurring(txn, r, accounts)) ?? null;
+  let best = null;
+  let score = Infinity;
+  for (const r of recurring) {
+    const m = recurringMatch(txn, r, accounts);
+    if (m && m.score < score) { best = r; score = m.score; }
+  }
+  return best;
 }
 
 /**

@@ -610,6 +610,9 @@ const byOrder = (a, b) => last(a) - last(b) || (a.sortOrder ?? 0) - (b.sortOrder
 const expenseCats = () => D.categories
   .filter((c) => c.kind === 'expense' && !c.hidden).sort(byOrder);
 const mainCats = () => expenseCats().filter((c) => !c.parentId);
+// 옮긴 돈 — 저축투자 · 카드대금 · 현금인출. 고를 수 있어야 고칠 수 있다.
+const movedCats = () => D.categories
+  .filter((c) => c.kind === 'transfer' && !c.hidden).sort(byOrder);
 const subCats = (parentId) => expenseCats().filter((c) => c.parentId === parentId);
 // 지워졌거나 모르는 칸을 가리키는 거래가 있다. 그때 `cat_gift` 같은 속이름을
 // 그대로 띄우면 쓰는 사람에게는 암호다.
@@ -626,6 +629,10 @@ function catOptions(selected = '') {
     if (!kids.length) { h += opt(m); continue; }
     h += `<optgroup label="${esc(m.name)}">${opt(m, `${m.name} 전체`)}`
        + kids.map((c) => opt(c)).join('') + '</optgroup>';
+  }
+  const moved = movedCats();
+  if (moved.length) {
+    h += `<optgroup label="옮긴 돈 — 지출로 세지 않음">${moved.map((c) => opt(c)).join('')}</optgroup>`;
   }
   return h;
 }
@@ -925,8 +932,10 @@ function renderShift(goal, planned) {
 
 // ───────────────────────────────────────────────── 내역
 
+// 카테고리가 있어야 "저축으로 옮긴 돈"을 지출에서 뺄 수 있다
 const histData = () =>
-  ({ transactions: D.txns, settlements: D.settlements, settings: D.settings });
+  ({ transactions: D.txns, settlements: D.settlements, settings: D.settings,
+     categories: D.categories });
 
 const sumCounted = (rows) => rows.reduce((s, r) => s + (r.counted ? r.net : 0), 0);
 
@@ -1159,7 +1168,7 @@ function renderShifts(month) {
 
   const rows = monthSpending(histData(), month);
   const only = Object.fromEntries(Object.entries(D.shifts).filter(([k]) => k.startsWith(month)));
-  const s = shiftStats({ transactions: rows, shifts: only, settlements: D.settlements });
+  const s = shiftStats({ transactions: rows, shifts: only, settlements: D.settlements, categories: D.categories });
   if (!s.items.length) return '';
 
   const top = Math.max(...s.items.map((i) => i.perDay), s.afterNight?.perDay || 0) || 1;
@@ -1189,7 +1198,7 @@ function renderShifts(month) {
 function txRow(r) {
   const open = editTxn === r.id;
   const cat = r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 미분류';
-  const note = [cat, r.cardName, r.counted ? '' : '예산 제외',
+  const note = [cat, r.cardName, r.moved ? '옮긴 돈 — 지출 아님' : (r.counted ? '' : '예산 제외'),
                 r.counted && !r.inStats ? '분석 제외' : '',
                 ...(r.tags || []).map((t) => `#${t}`), r.memo].filter(Boolean).join(' · ');
 
@@ -1577,6 +1586,19 @@ function renderPicker(t, hintedId, ns = 'inbox', currentId = '') {
     const parent = D.categories.find((x) => x.id === open);
     h += `<button type="button" class="pick" data-pick="${t.id}" data-cat="${open}">
       ${esc(parent?.name || '')} 전체</button>`;
+    h += '</div>';
+  }
+
+  // 쓴 게 아니라 옮긴 돈. 여기 없으면 적금에 넣은 돈을 고칠 길이 없다 —
+  // 고치는 길이 아예 없는 건 안 고쳐지는 것보다 나쁘다.
+  const moved = movedCats();
+  if (moved.length) {
+    h += `<div class="muted" style="margin:11px 0 5px">쓴 돈이 아니라면</div>
+      <div class="picks">`;
+    for (const c of moved) {
+      h += `<button type="button" class="pick moved${mark(c.id)}"
+        data-pick="${t.id}" data-cat="${c.id}">${esc(c.icon || '')} ${esc(c.name)}</button>`;
+    }
     h += '</div>';
   }
   return h;

@@ -122,14 +122,29 @@ const flat = (s) => String(s ?? '').toLowerCase().replace(/\s+/g, '');
  * 조용히 틀리고, 틀린 줄도 모른다.
  */
 export function matchCard(cardName, accounts = []) {
-  const key = flat(cardName);
-  if (!key) return null;
-  const cards = accounts.filter((a) => alive(a) && isCard(a));
+  return matchByName(cardName, accounts.filter((a) => alive(a) && isCard(a)));
+}
 
-  const exact = cards.filter((c) => flat(c.name) === key);
+/**
+ * 이름으로 계좌 하나를 집는다. 둘 이상에 걸리면 아무것도 안 고른다.
+ *
+ * 문자에 찍힌 상대가 **내 계좌**면 그건 쓴 돈이 아니라 옮긴 돈이다.
+ * "우리 09/21 출금 500,000 청약저축" 에서 청약저축이 내가 등록한 계좌라면
+ * 돈은 없어진 게 아니라 내 다른 주머니로 간 것이다.
+ */
+export function matchAccount(name, accounts = []) {
+  return matchByName(name, accounts.filter(alive));
+}
+
+function matchByName(name, list) {
+  const key = flat(name);
+  // 한두 글자로는 못 고른다. "우리"가 우리은행에도 우리카드에도 걸린다.
+  if (key.length < 2) return null;
+
+  const exact = list.filter((c) => flat(c.name) === key);
   if (exact.length === 1) return exact[0];
 
-  const loose = cards.filter((c) => {
+  const loose = list.filter((c) => {
     const n = flat(c.name);
     return n && (n.includes(key) || key.includes(n));
   });

@@ -15,6 +15,7 @@ import { hitsRecurring, liveRecurring } from './fixed.js';
 import { netAmount } from './settlement.js';
 import { rollup } from './accounts.js';
 import { prevBusinessDay } from './holidays.js';
+import { transferCats, isMoved } from './categories.js';
 
 /**
  * 한 주기의 처음과 끝.
@@ -143,6 +144,7 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
 
   const month = yyyymm || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const win = monthWindow(month, settings.cycleStartDay);
+  const moved = transferCats(categories);
 
   // ── 실제 ────────────────────────────────────────────────
   let actualIncome = 0;
@@ -153,7 +155,9 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
   for (const t of transactions) {
     if (t.status === 'voided') continue;
     if (!inWindow(t.occurredAt, win)) continue;
-    if (t.type === 'transfer') continue;          // 카드대금·저축은 지출이 아니다
+    // 카드대금·저축은 지출이 아니다. 문자에서 바로 알아본 것도,
+    // 사람이 보고 저축투자로 고친 것도 똑같이 뺀다.
+    if (isMoved(t, moved)) continue;
     if (t.excludeFromBudget) continue;
 
     if (t.type === 'income') { actualIncome += Number(t.amount || 0); continue; }
@@ -252,20 +256,24 @@ export function shiftMonth(yyyymm, delta) {
  * 다른지 알 길이 없다.
  */
 export function monthSpending(data = {}, yyyymm, now = new Date()) {
-  const { transactions = [], settlements = [], settings = {} } = data;
+  const { transactions = [], settlements = [], settings = {}, categories = [] } = data;
   const win = monthWindow(yyyymm || monthKey(now), settings.cycleStartDay);
+  const moved = transferCats(categories);
 
   return transactions
     .filter((t) => t.status !== 'voided' && t.type === 'expense' && inWindow(t.occurredAt, win))
     .map((t) => {
       const net = netAmount(t, settlements);
+      // 옮긴 돈은 목록에는 남기되 세지 않는다. 아예 지우면 "그날 50만원이
+      // 어디 갔지" 하고 찾게 된다 — 옮겼다는 것도 봐야 하는 사실이다.
+      const away = isMoved(t, moved);
       return {
-        ...t, net,
-        counted: !t.excludeFromBudget && net > 0,
+        ...t, net, moved: away,
+        counted: !away && !t.excludeFromBudget && net > 0,
         // 총액에는 남기고 **분석에서만** 빼는 건이 있다. 경조사 한 번, 병원비
         // 한 번에 카테고리 그림과 근무별 평균이 통째로 일그러지는데, 총액에서
         // 빼 버리면 카드사 누적과 안 맞아 "놓친 결제"로 뜬다.
-        inStats: !t.excludeFromBudget && !t.excludeFromStats && net > 0,
+        inStats: !away && !t.excludeFromBudget && !t.excludeFromStats && net > 0,
       };
     })
     .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));

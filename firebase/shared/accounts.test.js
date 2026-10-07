@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { debtOf, cashOf, billingWindow, cardBills, rollup, rateOf, cardGroup, matchCard, inCards }
+import { debtOf, cashOf, billingWindow, cardBills, rollup, rateOf, cardGroup, matchCard,
+         matchAccount, inCards }
   from './accounts.js';
 
 const NOW = new Date(2026, 8, 19, 12, 0);   // 2026-09-19
@@ -221,4 +222,32 @@ test('accountId 가 없는 문자 거래도 청구에 잡힌다', () => {
 test('없는 카드 이름은 어디에도 안 붙는다', () => {
   assert.equal(inCards({ cardName: '신한체크' }, HD), false);
   assert.equal(inCards({ accountId: 'zzz' }, HD), false);
+});
+
+test('문자에 찍힌 상대가 내 계좌면 집어낸다', () => {
+  const accounts = [
+    { id: 'a1', type: 'checking', name: '우리은행', active: true },
+    { id: 'a2', type: 'savings', name: '청약저축', active: true },
+    { id: 'c1', type: 'card', name: '현대 미래에셋', active: true },
+  ];
+  assert.equal(matchAccount('청약저축', accounts)?.id, 'a2');
+  assert.equal(matchAccount('청약', accounts)?.id, 'a2', '일부만 찍혀도 찾는다');
+  assert.equal(matchAccount('현대 미래에셋', accounts)?.id, 'c1', '카드도 계좌다');
+  assert.equal(matchAccount('GS25서구탑병원점', accounts), null, '남의 가게는 아니다');
+  assert.equal(matchAccount('', accounts), null);
+});
+
+test('한두 글자로는 계좌를 고르지 않는다', () => {
+  const accounts = [
+    { id: 'a1', type: 'checking', name: '우리은행', active: true },
+    { id: 'c1', type: 'card', name: '우리 체크카드', active: true },
+  ];
+  // "우리"는 둘 다에 걸린다. 엉뚱한 데 붙이면 조용히 틀린다.
+  assert.equal(matchAccount('우리', accounts), null);
+  assert.equal(matchAccount('우', accounts), null);
+});
+
+test('그만둔 계좌는 고르지 않는다', () => {
+  const accounts = [{ id: 'a1', type: 'savings', name: '옛적금', active: false }];
+  assert.equal(matchAccount('옛적금', accounts), null);
 });

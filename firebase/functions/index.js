@@ -15,7 +15,8 @@ import { createHash } from 'node:crypto';
 import { parseMessage, normalizeMerchant, splitMessages } from './shared/parse.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { ledger, monthSpending, sameSpanLastMonth, pace, topSpending } from './shared/ledger.js';
-import { matchCard } from './shared/accounts.js';
+import { matchCard, matchAccount, isCard } from './shared/accounts.js';
+import { looksLikeSaving } from './shared/categories.js';
 
 initializeApp();
 const db = getFirestore();
@@ -156,7 +157,7 @@ async function takeOne(payload) {
   // 문자는 "현대 미래에셋 승인"인데 파서는 "미래에셋"만 남긴다. 여기서 등록한
   // 카드에 붙여 두지 않으면 청구액도 누적 대조도 그 거래를 못 본다.
   const card = matchCard(parsed.cardName, accounts);
-  const txn = buildTransaction(parsed, rawId, location, decision, txnRef.id, card);
+  const txn = buildTransaction(parsed, rawId, location, decision, txnRef.id, card, accounts);
 
   const batch = db.batch();
   batch.set(root.collection('raw').doc(rawId), { ...raw, txnId: txnRef.id });
@@ -182,7 +183,7 @@ async function takeOne(payload) {
   return { ...response, status: 'ok', kind: response.status };
 }
 
-function buildTransaction(parsed, rawId, location, decision, id, card) {
+function buildTransaction(parsed, rawId, location, decision, id, card, accounts = []) {
   const txn = {
     id,
     type: 'expense',
@@ -214,16 +215,28 @@ function buildTransaction(parsed, rawId, location, decision, id, card) {
     txn.categoryId = 'cat_salary';
     txn.status = 'confirmed';
   } else if (parsed.kind === 'withdrawal') {
-    // 카드 대금 출금은 지출이 아니라 계정 간 이체다.
-    // 이걸 지출로 잡으면 매달 카드값만큼 지출이 부풀어 오른다.
-    if (/현대\s*카드|카드\s*대금/.test(parsed.merchantRaw || '')) {
+    // 나간 돈이 다 쓴 돈은 아니다. 적금에 넣은 50만원을 지출로 세면 그달에
+    // 50만원을 쓴 것이 되고 예산도 통계도 그만큼 부풀어 오른다.
+    const who = parsed.merchantRaw || '';
+    const mine = matchAccount(who, accounts);
+
+    if (/카드\s*대금|카드대금/.test(who) || (mine && isCard(mine))) {
       txn.type = 'transfer';
       txn.categoryId = 'cat_cardbill';
       txn.excludeFromBudget = true;
       txn.status = 'confirmed';
-    } else if (/ATM|CD기|현금인출/i.test(parsed.merchantRaw || '')) {
+    } else if (/ATM|CD기|현금인출/i.test(who)) {
       txn.type = 'transfer';
       txn.categoryId = 'cat_withdraw';
+      txn.excludeFromBudget = true;
+      txn.status = 'confirmed';
+    } else if (mine || looksLikeSaving(who)) {
+      // 상대가 **내 계좌**거나 적금·청약 같은 말이면 옮긴 돈이다.
+      // 그냥 "이체"나 "송금"은 여기서 안 건드린다 — 지인에게 보낸 돈일 수도
+      // 있어서 짐작하면 쓴 돈이 조용히 사라진다. 그건 확인 탭에서 고른다.
+      txn.type = 'transfer';
+      txn.categoryId = 'cat_saving';
+      txn.counterAccountId = mine?.id || null;
       txn.excludeFromBudget = true;
       txn.status = 'confirmed';
     }
@@ -308,9 +321,10 @@ export const summary = onRequest(
       const categories = asArray(catSnap);
       const L = ledger({ transactions, accounts, categories, recurring: asArray(recSnap),
                          settlements: [], raw: [], settings });
-      const spent = monthSpending({ transactions, settlements: [], settings });
+      // 카테고리를 넘겨야 저축으로 옮긴 돈을 지출에서 뺀다
+      const spent = monthSpending({ transactions, settlements: [], settings, categories });
       const total = spent.reduce((s, r) => s + (r.counted ? r.net : 0), 0);
-      const prev = sameSpanLastMonth({ transactions, settlements: [], settings });
+      const prev = sameSpanLastMonth({ transactions, settlements: [], settings, categories });
       const run = pace(total, L.month, settings.cycleStartDay);
       const bill = L.cards.items[0] || null;
 

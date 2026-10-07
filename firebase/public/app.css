@@ -250,3 +250,7 @@ th{font-weight:600;color:var(--ink2);white-space:nowrap}
 /* 분석에서 뺀 줄. 총액에는 남아 있으니 지운 것처럼 보이면 안 된다. */
 .tx.nostat .tx-name{opacity:.62}
 .tx.nostat .tx-amt{opacity:.62;text-decoration:line-through}
+
+/* 옮긴 돈 카테고리. 쓴 돈과 섞여 보이면 안 된다. */
+.pick.moved{background:var(--ground);border-style:dashed;color:var(--ink2)}
+.pick.moved.on{border-style:solid;color:var(--ink)}

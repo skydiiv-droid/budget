@@ -10,6 +10,7 @@
  * 다음 날 쓴 돈이 아니다.
  */
 import { netAmount } from './settlement.js';
+import { transferCats, isMoved } from './categories.js';
 
 export const SHIFT_KINDS = ['day', 'evening', 'night', 'off'];
 export const SHIFT_LABEL = { day: '데이', evening: '이브닝', night: '나이트', off: '오프' };
@@ -72,11 +73,14 @@ export function shiftDateOf(occurredAt) {
  * 수도 있어서, 총액만 보면 아무것도 알 수 없다.
  */
 export function shiftStats(data = {}) {
-  const { transactions = [], shifts = {}, settlements = [] } = data;
+  const { transactions = [], shifts = {}, settlements = [], categories = [] } = data;
+  const moved = transferCats(categories);
 
   const spentOn = new Map();
   for (const t of transactions) {
     if (t.type !== 'expense' || t.status === 'voided' || t.excludeFromBudget) continue;
+    // 적금에 넣은 돈은 그 근무에 "쓴" 돈이 아니다
+    if (isMoved(t, moved)) continue;
     // 경조사 한 번에 나이트 하루 평균이 통째로 뒤집힌다. 총액에는 남기되
     // 여기서는 뺀다.
     if (t.excludeFromStats) continue;

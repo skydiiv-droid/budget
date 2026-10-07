@@ -100,3 +100,18 @@ test('짚이는 게 없으면 이름 그대로를 권한다', () => {
   const s = suggestKeyword('듣도보도못한가게', { rules: RULES });
   assert.equal(s.scope, 'exact', '억지로 잘라내면 엉뚱한 곳까지 분류된다');
 });
+
+test('영문 규칙은 소문자로 찍혀도 걸린다', () => {
+  const rules = [{ id: 'r1', matchType: 'contains', pattern: 'NETFLIX', categoryId: 'cat_sub' }];
+  assert.equal(classify('netflix.com', { rules }).categoryId, 'cat_sub');
+  assert.equal(classify('Netflix Korea', { rules }).categoryId, 'cat_sub');
+});
+
+test('두 글자 영문은 대소문자를 가린다', () => {
+  // "CU" 를 소문자까지 받으면 document · security 처럼 가운데에 cu 가 든
+  // 이름이 죄다 편의점이 된다. (대문자로 든 이름은 어차피 걸린다 — 두 글자로는
+  // 여기까지가 한계다.)
+  const rules = [{ id: 'r1', matchType: 'contains', pattern: 'CU', categoryId: 'cat_cvs' }];
+  assert.equal(classify('CU마곡점', { rules }).categoryId, 'cat_cvs');
+  assert.equal(classify('document service', { rules }).categoryId, null);
+});

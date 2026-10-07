@@ -18,6 +18,9 @@
 
   --warn:#7A5A10; --warn-mark:#C08A1E; --warn-dim:#FDF6E7; --warn-line:#E8DAB4;
 
+  /* 어두운 알림 띠 위에 올라가는 글자. 바탕이 검으니 파랑도 밝은 쪽을 쓴다. */
+  --on-dark-link:#9ECBFF;
+
   /* 예전 이름. 남은 데가 있어도 검게 나오지 않도록 남겨 둔다. */
   --spend:#1D6FE0; --spend-dim:#EAF1FC; --spend-line:#C6DBF6;
 }
@@ -254,3 +257,8 @@ th{font-weight:600;color:var(--ink2);white-space:nowrap}
 /* 옮긴 돈 카테고리. 쓴 돈과 섞여 보이면 안 된다. */
 .pick.moved{background:var(--ground);border-style:dashed;color:var(--ink2)}
 .pick.moved.on{border-style:solid;color:var(--ink)}
+
+/* 되돌리는 단추. 한 번 누르면 되돌릴 수 없는 건 기능이 아니다 */
+.toast-undo{margin-left:12px;background:none;border:0;padding:2px 0;cursor:pointer;
+  color:var(--on-dark-link);font-size:13px;font-weight:700;font-family:inherit;
+  text-decoration:underline;text-underline-offset:2px}

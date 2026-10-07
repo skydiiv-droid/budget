@@ -36,7 +36,7 @@ import { fixedStatus, lateFixed, parseKeywords, learnKeyword, knownKeyword,
 import { classify, suggestKeyword } from './shared/classify.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
 import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
-         CAT_VERSION, ACCOUNT_VERSION, ACCOUNT_FIXES } from './shared/seed.js';
+         CAT_VERSION, RULE_VERSION, ACCOUNT_VERSION, ACCOUNT_FIXES } from './shared/seed.js';
 
 const $ = (id) => document.getElementById(id);
 const won = (n) => Number(n || 0).toLocaleString('ko-KR');
@@ -139,13 +139,29 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden && privacyOn()) applyMask(true);
 });
 
-function toast(msg) {
+/**
+ * 한 줄 알림. 되돌릴 거리가 있으면 되돌리는 단추를 같이 띄운다.
+ *
+ * 한 번 누르면 되돌릴 수 없는 건 기능이 아니다. 여러 건을 한꺼번에 바꾸는
+ * 자리는 특히 그렇다 — 무심코 눌렀는데 지난 내역이 다 바뀌면 손쓸 데가 없다.
+ */
+function toast(msg, undo) {
   const el = document.createElement('div');
   el.className = 'toast';
-  el.textContent = msg;
   el.setAttribute('role', 'status');
+  el.append(document.createTextNode(msg));
+
+  if (undo) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toast-undo';
+    b.textContent = '되돌리기';
+    b.addEventListener('click', async () => { el.remove(); await undo(); });
+    el.append(b);
+  }
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2800);
+  // 되돌릴 것이 있으면 조금 더 둔다. 읽고 누를 틈이 있어야 한다.
+  setTimeout(() => el.remove(), undo ? 7000 : 2800);
 }
 
 function screen(html) {
@@ -225,6 +241,7 @@ function watchNetwork() {
       await claimOwner(user);
       await seedIfEmpty();
       await syncCategories();
+      await syncRules();
       await migrateDebts();
       await fixSeededAccounts();
       await migrateRevolving();
@@ -282,13 +299,17 @@ async function seedIfEmpty() {
   const existing = await getDocs(query(col('categories'), limit(1)));
   if (!existing.empty) return;
 
-  const batch = writeBatch(db);
-  for (const c of categoryDocs()) batch.set(doc(col('categories'), c.id), c);
-  for (const r of ruleDocs()) batch.set(doc(col('rules'), r.id), r);
-  for (const m of merchantDocs()) batch.set(doc(col('merchants'), m.id), m);
-  for (const a of accountDocs()) batch.set(doc(col('accounts'), a.id), a);
-  batch.set(doc(db, 'users', uid, 'meta', 'settings'), SETTINGS);
-  await batch.commit();
+  // 규칙이 삼백 개를 넘는다. 한 배치는 500 개까지라 나눠 보낸다 —
+  // 넘치면 처음 켜는 사람이 아무 말 없이 빈 앱을 보게 된다.
+  const ops = [
+    ...categoryDocs().map((c) => (b) => b.set(doc(col('categories'), c.id), c)),
+    ...ruleDocs().map((r) => (b) => b.set(doc(col('rules'), r.id), r)),
+    ...merchantDocs().map((m) => (b) => b.set(doc(col('merchants'), m.id), m)),
+    ...accountDocs().map((a) => (b) => b.set(doc(col('accounts'), a.id), a)),
+    (b) => b.set(doc(db, 'users', uid, 'meta', 'settings'),
+      { ...SETTINGS, catVersion: CAT_VERSION, ruleVersion: RULE_VERSION }),
+  ];
+  await commitAll(ops);
 }
 
 /**
@@ -315,6 +336,27 @@ async function syncCategories() {
   }
   batch.set(metaRef, { catVersion: CAT_VERSION }, { merge: true });
   await batch.commit();
+}
+
+/**
+ * 기본 분류 규칙을 더 넣는다.
+ *
+ * 쓰던 사람에게는 seedIfEmpty 가 돌지 않아, 새로 적어 둔 규칙이 영영 안 들어온다.
+ * 이미 있는 낱말은 건드리지 않는다 — 카테고리를 바꿔 뒀을 수 있다.
+ * 지운 낱말도 되살리지 않는다. 지운 건 지운 것이다.
+ */
+async function syncRules() {
+  const metaRef = doc(db, 'users', uid, 'meta', 'settings');
+  const meta = await getDoc(metaRef);
+  if (!meta.exists()) return;
+  if (Number(meta.data().ruleVersion || 0) >= RULE_VERSION) return;
+
+  const gone = new Set(meta.data().removedRulePatterns || []);
+  const have = new Set((await readAll('rules')).map((r) => String(r.pattern)));
+  const add = ruleDocs().filter((r) => !have.has(r.pattern) && !gone.has(r.pattern));
+
+  await commitAll(add.map((r) => (b) => b.set(doc(col('rules'), r.id), r)));
+  await setDoc(metaRef, { ruleVersion: RULE_VERSION }, { merge: true });
 }
 
 /**
@@ -608,13 +650,39 @@ function renderTagList() {
 // 미분류는 늘 맨 뒤다. 새로 만든 갈래가 그 뒤로 가면 어색하다.
 const last = (c) => (c.id === 'cat_unknown' ? 1 : 0);
 const byOrder = (a, b) => last(a) - last(b) || (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
-const expenseCats = () => D.categories
-  .filter((c) => c.kind === 'expense' && !c.hidden).sort(byOrder);
-const mainCats = () => expenseCats().filter((c) => !c.parentId);
+const catsOfKind = (kind) => D.categories
+  .filter((c) => c.kind === kind && !c.hidden).sort(byOrder);
+const expenseCats = () => catsOfKind('expense');
+const mainCats = (kind = 'expense') => catsOfKind(kind).filter((c) => !c.parentId);
 // 옮긴 돈 — 저축투자 · 카드대금 · 현금인출. 고를 수 있어야 고칠 수 있다.
 const movedCats = () => D.categories
   .filter((c) => c.kind === 'transfer' && !c.hidden).sort(byOrder);
-const subCats = (parentId) => expenseCats().filter((c) => c.parentId === parentId);
+const subCats = (parentId, kind = 'expense') =>
+  catsOfKind(kind).filter((c) => c.parentId === parentId);
+
+/**
+ * 자주 쓰는 카테고리.
+ *
+ * 한 건 고치려고 매번 큰 갈래부터 파고 들어가면 세 번을 눌러야 한다. 거의 늘
+ * 같은 몇 칸으로 가므로 그것만 앞에 꺼내 둔다 — 한 번 누르면 끝난다.
+ * 최근에 쓴 것을 무겁게 센다. 지난 계절에 쓰던 칸이 앞에 있으면 쓸모가 없다.
+ */
+function topCats(kind = 'expense', max = 6, now = Date.now()) {
+  const score = new Map();
+  for (const t of D.txns) {
+    if (!t.categoryId || t.status === 'voided') continue;
+    const cat = D.categories.find((c) => c.id === t.categoryId);
+    if (!cat || cat.hidden || cat.kind !== kind) continue;
+    const days = (now - new Date(t.occurredAt)) / 86400000;
+    if (days < 0 || days > 120) continue;
+    score.set(cat.id, (score.get(cat.id) || 0) + (days <= 30 ? 2 : 1));
+  }
+  return [...score.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, max)
+    .map(([id]) => D.categories.find((c) => c.id === id))
+    .filter(Boolean);
+}
 // 지워졌거나 모르는 칸을 가리키는 거래가 있다. 그때 `cat_gift` 같은 속이름을
 // 그대로 띄우면 쓰는 사람에게는 암호다.
 const catName = (id) => D.categories.find((c) => c.id === id)?.name ?? '미분류';
@@ -1227,7 +1295,7 @@ function txEdit(r) {
   let h = `<div class="edit">
     <div class="lbl" style="margin-bottom:9px">카테고리 변경</div>
     ${renderPicker(r, null, 'hist', r.categoryId || '')}
-    <div class="field" style="margin:13px 0 0"><label>이후 이 가맹점은</label>
+    <div class="field" style="margin:13px 0 0"><label>이후 같은 가맹점은</label>
       <select data-scope="${r.id}">
         ${scopes.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
       </select></div>
@@ -1312,7 +1380,10 @@ function renderRules() {
 }
 
 function renderInbox() {
-  const pending = D.txns.filter((t) => t.status === 'pendingCategory' && t.type === 'expense');
+  // 들어온 돈도 물어볼 것이 있다. 지출만 보면 "급여"로 잡혀 버린 입금을
+  // 고칠 자리가 어디에도 없다.
+  const pending = D.txns.filter((t) => t.status === 'pendingCategory'
+    && (t.type === 'expense' || t.type === 'income'));
   const unparsed = D.raw.filter((r) => !r.parsedOk && !r.txnId);
   const cancels = openCancels(D.txns);
   const found = detectRecurring({ transactions: D.txns, recurring: D.recurring, settings: D.settings });
@@ -1379,6 +1450,20 @@ function renderInbox() {
 
   if (pending.length) {
     h += `<div class="lbl" style="margin:${cancels.length || found.length ? 18 : 2}px 0 9px">카테고리 지정 · ${pending.length}건</div>`;
+
+    // 규칙이 아는 가맹점인데 미분류로 남은 건. 규칙은 새로 넣어도 이미 들어온
+    // 문자에 소급되지 않아 이런 것이 쌓인다. 하나씩 누를 일이 아니다.
+    const ready = autoReady(pending);
+    if (ready.length >= 2) {
+      h += `<div class="card"><div class="row" style="align-items:flex-start">
+        <span class="grow"><span style="font-size:14px;font-weight:600">${ready.length}건은 규칙으로 분류됩니다</span><br>
+          <span class="muted">${esc([...new Set(ready.map(({ t, categoryId }) =>
+            `${t.merchantRaw || '가맹점 미상'} → ${catName(categoryId)}`))].slice(0, 3).join(' · '))}${
+            ready.length > 3 ? ' 등' : ''}</span></span></div>
+        <button type="button" class="act primary" style="width:100%;margin-top:12px"
+          id="autoClassify">한 번에 분류</button></div>`;
+    }
+
     for (const t of pending) {
       const decision = classify(t.merchantRaw, {
         merchants: D.merchants, rules: D.rules, transactions: D.txns,
@@ -1389,8 +1474,10 @@ function renderInbox() {
       h += `<div class="card">
         <div class="row" style="align-items:flex-start">
           <span class="grow"><span style="font-size:15px;font-weight:600">${esc(t.merchantRaw || '(가맹점 미상)')}</span><br>
-            <span class="muted">${esc(String(t.occurredAt).replace('T', ' ').slice(5, 16))}${t.cardName ? ' · ' + esc(t.cardName) : ''}</span></span>
-          <span class="big num" style="font-size:22px">${won(t.amount)}</span></div>`;
+            <span class="muted">${esc(String(t.occurredAt).replace('T', ' ').slice(5, 16))}${
+              t.cardName ? ' · ' + esc(t.cardName) : ''}${t.type === 'income' ? ' · 입금' : ''}</span></span>
+          <span class="big num" style="font-size:22px${
+            t.type === 'income' ? ';color:var(--up)' : ''}">${won(t.amount)}</span></div>`;
 
       if (decision.nearby?.samples) {
         h += `<div class="note ok" style="margin:12px 0 0;padding:9px 12px">
@@ -1400,10 +1487,11 @@ function renderInbox() {
       h += renderPicker(t, decision.nearby?.categoryId);
 
       h += `<div class="hr"></div>
-        <div class="field" style="margin:0"><label>이후 이 가맹점은</label>
+        ${t.type === 'income' ? '' : `<div class="field" style="margin:0">
+          <label>이후 같은 가맹점은</label>
           <select data-scope="${t.id}">
-          ${scopeOptions(t.merchantRaw, hint).map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
-          </select></div></div>`;
+          ${scopeOptions(t.merchantRaw, hint, 'exact').map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+          </select></div>`}</div>`;
     }
   }
 
@@ -1550,7 +1638,14 @@ function gapWindow(c) {
   return h;
 }
 
+/**
+ * 카테고리 고르기.
+ *
+ * 들어온 돈은 수입 칸에서 고른다. 지출 칸만 내주면 급여로 잡힌 입금을
+ * 정산입금으로 고칠 길이 없다 — 고칠 길이 없는 건 안 고쳐지는 것보다 나쁘다.
+ */
 function renderPicker(t, hintedId, ns = 'inbox', currentId = '') {
+  const kind = t.type === 'income' ? 'income' : 'expense';
   const key = `${ns}:${t.id}`;
   // 아직 아무것도 안 건드렸으면 지금 들어 있는 칸을 펼쳐 둔다. null 은 일부러 닫은 것이다.
   if (!openMain.has(key) && currentId) {
@@ -1558,18 +1653,29 @@ function renderPicker(t, hintedId, ns = 'inbox', currentId = '') {
   }
   const open = openMain.get(key);
   const mark = (id) => (id === currentId ? ' on' : '');
-  let h = '<div class="picks" style="margin-top:13px">';
-
   const hinted = hintedId && D.categories.find((c) => c.id === hintedId);
+  let h = '';
+
+  // 거의 늘 같은 몇 칸으로 간다. 그것만 앞에 꺼내 두면 한 번 누르면 끝난다.
+  const often = topCats(kind).filter((c) => c.id !== hinted?.id);
+  if (often.length >= 3) {
+    h += `<div class="muted" style="margin:13px 0 5px">자주 쓰는 카테고리</div>
+      <div class="picks">${often.map((c) =>
+        `<button type="button" class="pick${mark(c.id)}" data-pick="${t.id}" data-cat="${c.id}">
+          ${esc(c.icon || '')} ${esc(c.name)}</button>`).join('')}</div>`;
+  }
+
+  h += `<div class="picks" style="margin-top:${often.length >= 3 ? 11 : 13}px">`;
+
   if (hinted) {
     h += `<button type="button" class="pick" data-pick="${t.id}" data-cat="${hinted.id}"
       style="background:var(--blue);color:#fff;border-color:var(--blue);font-weight:600">
       ${esc(hinted.icon || '')} ${esc(hinted.name)}</button>`;
   }
 
-  for (const m of mainCats()) {
+  for (const m of mainCats(kind)) {
     if (hinted && m.id === hinted.id) continue;
-    const kids = subCats(m.id);
+    const kids = subCats(m.id, kind);
     h += `<button type="button" class="pick${mark(m.id)}"
       ${kids.length ? `data-main="${ns}:${t.id}:${m.id}" aria-expanded="${open === m.id}"`
                     : `data-pick="${t.id}" data-cat="${m.id}"`}>
@@ -1577,7 +1683,7 @@ function renderPicker(t, hintedId, ns = 'inbox', currentId = '') {
   }
   h += '</div>';
 
-  const kids = open ? subCats(open) : [];
+  const kids = open ? subCats(open, kind) : [];
   if (kids.length) {
     h += '<div class="subs">';
     for (const c of kids) {
@@ -1592,7 +1698,7 @@ function renderPicker(t, hintedId, ns = 'inbox', currentId = '') {
 
   // 쓴 게 아니라 옮긴 돈. 여기 없으면 적금에 넣은 돈을 고칠 길이 없다 —
   // 고치는 길이 아예 없는 건 안 고쳐지는 것보다 나쁘다.
-  const moved = movedCats();
+  const moved = kind === 'income' ? [] : movedCats();
   if (moved.length) {
     h += `<div class="muted" style="margin:11px 0 5px">쓴 돈이 아니라면</div>
       <div class="picks">`;
@@ -1622,15 +1728,23 @@ function sweepCount(txn, scopeValue) {
   }).length;
 }
 
-function scopeOptions(merchantRaw, hint) {
+/**
+ * 「이후 같은 가맹점은」 에 내줄 보기. **맨 앞이 기본값이다.**
+ *
+ * 어디서 고치는지에 따라 기본이 달라야 한다.
+ *   내역에서 고친다  이미 분류돼 있던 것을 **이번만** 다르게 넣는 일이 대부분이다
+ *   확인에서 정한다  처음 정하는 것이니 **앞으로도** 그렇게 두는 편이 일이 적다
+ * 기본이 넓은 쪽이면 무심코 눌렀을 때 규칙이 생기고 지난 건까지 끌려 들어간다.
+ * 한 번 누르면 되돌릴 수 없는 건 기능이 아니다.
+ */
+function scopeOptions(merchantRaw, hint, base = 'once') {
   const normalized = normalizeMerchant(merchantRaw);
-  const out = [];
-  if (hint.scope === 'contains' && hint.keyword && hint.keyword !== normalized) {
-    out.push(`전체: ${hint.keyword}`);
-  }
-  if (normalized) out.push(`이 가맹점만: ${normalized}`);
-  out.push('이번만 적용');
-  return out;
+  const wide = (hint.scope === 'contains' && hint.keyword && hint.keyword !== normalized)
+    ? `전체: ${hint.keyword}` : '';
+  const exact = normalized ? `이 가맹점만: ${normalized}` : '';
+  const once = '이번만 적용';
+  const order = base === 'exact' ? [exact, wide, once] : [once, exact, wide];
+  return order.filter(Boolean);
 }
 
 function renderFixed() {
@@ -2456,6 +2570,13 @@ const formData = (form) => Object.fromEntries(
   [...form.elements].filter((f) => f.name)
     .map((f) => [f.name, f.type === 'checkbox' ? f.checked : f.value]));
 
+/**
+ * 카테고리를 정한다.
+ *
+ * 세 가지 일이 한꺼번에 일어날 수 있다 — 이 거래를 바꾸고, 규칙을 만들고,
+ * 같은 가맹점의 다른 건까지 바꾼다. 셋 다 되돌릴 수 있어야 한다.
+ * 바꾼 것을 그대로 적어 두고 「되돌리기」가 그걸 쓴다.
+ */
 async function pickCategory(txnId, categoryId, box) {
   const txn = D.txns.find((t) => t.id === txnId);
   if (!txn) return;
@@ -2467,6 +2588,9 @@ async function pickCategory(txnId, categoryId, box) {
 
   const batch = writeBatch(db);
   dropOlder();
+  // 되돌릴 거리. 바꾸기 전 값을 그대로 들고 있는다.
+  const back = { txns: [{ id: txnId, categoryId: txn.categoryId || '', status: txn.status || '' }],
+                 rule: null, merchant: null };
   batch.update(doc(col('txns'), txnId), { categoryId, status: 'confirmed' });
 
   const normalized = normalizeMerchant(txn.merchantRaw);
@@ -2475,6 +2599,7 @@ async function pickCategory(txnId, categoryId, box) {
   if (scope === 'contains' && keyword.length >= 2) {
     // 같은 낱말로 다시 고르면 규칙이 쌓이지 않고 카테고리만 바뀐다
     const id = `rul_learned_${encodeURIComponent(keyword)}`;
+    back.rule = { id, was: D.rules.find((r) => r.id === id) || null };
     batch.set(doc(col('rules'), id), {
       id, priority: 10, matchType: 'contains', pattern: keyword,
       categoryId, source: 'learned', hitCount: 0,
@@ -2482,6 +2607,7 @@ async function pickCategory(txnId, categoryId, box) {
     learned = `이후 「${keyword}」 자동 분류`;
   } else if (scope === 'exact' && normalized) {
     const id = `mch_${encodeURIComponent(normalized)}`;
+    back.merchant = { id, was: D.merchants.find((m) => m.id === id) || null };
     batch.set(doc(col('merchants'), id), {
       id, normalizedName: normalized, displayName: txn.merchantRaw,
       defaultCategoryId: categoryId, isPassthrough: false, alwaysAsk: false,
@@ -2507,6 +2633,7 @@ async function pickCategory(txnId, categoryId, box) {
       if (!other) continue;
       const hit = sweepScope === 'contains' ? other.includes(sweepWord) : other === sweepWord;
       if (!hit) continue;
+      back.txns.push({ id: t.id, categoryId: t.categoryId || '', status: t.status || '' });
       batch.update(doc(col('txns'), t.id), { categoryId, status: 'confirmed' });
       if (waiting) also++; else past++;
     }
@@ -2514,10 +2641,67 @@ async function pickCategory(txnId, categoryId, box) {
 
   await batch.commit();
   await refresh();
+  // 거래 하나만 바뀐 것이면 되돌릴 일도 거의 없다. 규칙이 생겼거나 여러 건이
+  // 끌려 들어갔을 때만 되돌리는 단추를 내준다.
+  const heavy = learned || also || past;
   toast([`${catName(categoryId)}(으)로 저장`, learned,
          also ? `대기 중이던 ${also}건도 분류` : '',
          past ? `기존 ${past}건도 변경` : '']
-    .filter(Boolean).join(' · '));
+    .filter(Boolean).join(' · '),
+    heavy ? () => undoPick(back) : null);
+}
+
+/** 카테고리 지정을 되돌린다. 거래도, 그때 만든 규칙도 제자리로 보낸다. */
+async function undoPick(back) {
+  dropOlder();
+  const ops = back.txns.map((b) => (batch) =>
+    batch.update(doc(col('txns'), b.id), { categoryId: b.categoryId, status: b.status }));
+
+  for (const [name, b] of [['rules', back.rule], ['merchants', back.merchant]]) {
+    if (!b) continue;
+    ops.push((batch) => (b.was
+      ? batch.set(doc(col(name), b.id), b.was)
+      : batch.delete(doc(col(name), b.id))));
+  }
+  await commitAll(ops);
+  await refresh();
+  toast(`${back.txns.length}건을 되돌렸습니다`);
+}
+
+/**
+ * 규칙만으로 답이 나오는 미분류 건.
+ *
+ * 규칙을 새로 넣으면 이미 들어와 있던 문자에는 소급되지 않는다. 그래서 규칙이
+ * 아는 가맹점인데도 미분류로 남아 있는 건이 쌓인다. 그건 한 번에 정리할 수 있다.
+ */
+function autoReady(list = []) {
+  const out = [];
+  for (const t of list) {
+    // 들어온 돈은 규칙으로 짐작하지 않는다. 입금자명이 가맹점 규칙에 걸리면
+    // 급여가 카페 지출이 된다.
+    if (t.type !== 'expense') continue;
+    const { categoryId } = classify(t.merchantRaw, {
+      merchants: D.merchants, rules: D.rules, transactions: D.txns,
+      location: t.lat != null ? { lat: t.lat, lon: t.lon } : null,
+    });
+    if (categoryId && categoryId !== t.categoryId) out.push({ t, categoryId });
+  }
+  return out;
+}
+
+/** 그 건들을 한 번에 분류한다. 규칙이 말하는 대로만 넣는다. */
+async function classifyReady(list) {
+  const ready = autoReady(list);
+  if (!ready.length) return toast('규칙으로 분류되는 건이 없습니다');
+
+  dropOlder();
+  const back = { txns: ready.map(({ t }) => ({ id: t.id, categoryId: t.categoryId || '',
+                                               status: t.status || '' })),
+                 rule: null, merchant: null };
+  await commitAll(ready.map(({ t, categoryId }) => (batch) =>
+    batch.update(doc(col('txns'), t.id), { categoryId, status: 'confirmed' })));
+  await refresh();
+  toast(`${ready.length}건을 분류했습니다`, () => undoPick(back));
 }
 
 function parseScope(text, merchantRaw) {
@@ -2539,6 +2723,20 @@ async function commitAll(ops) {
     for (const op of ops.slice(i, i + 400)) op(batch);
     await batch.commit();
   }
+}
+
+/**
+ * 지운 규칙의 낱말을 적어 둔다.
+ *
+ * 기본 규칙을 지워도 다음 판올림이 같은 낱말을 다시 넣으면 지운 적이 없는
+ * 것과 같다. 지운 것은 지운 것이다.
+ */
+async function forgetRule(id) {
+  const rule = D.rules.find((r) => r.id === id);
+  if (!rule?.pattern) return;
+  const gone = [...new Set([...(D.settings.removedRulePatterns || []), String(rule.pattern)])];
+  await setDoc(doc(db, 'users', uid, 'meta', 'settings'),
+    { removedRulePatterns: gone }, { merge: true });
 }
 
 /**
@@ -3090,6 +3288,8 @@ document.addEventListener('click', guard(async (e) => {
     // 이어 붙여 둔 거래를 안 풀어 주면 없어진 고정지출을 가리킨 채 남는다.
     // 그 거래는 어느 고정지출로도 안 잡히고 다시 이을 수도 없게 된다.
     if (name === 'recurring') await unlinkAll(id);
+    // 지운 규칙은 되살리지 않는다. 적어 두지 않으면 다음 판올림이 다시 넣는다.
+    if (name === 'rules') await forgetRule(id);
     await deleteDoc(doc(col(name), id));
     if (name === 'txns') { editTxn = null; dropOlder(); }
     await refresh();
@@ -3112,6 +3312,11 @@ document.addEventListener('click', guard(async (e) => {
   }
   const dutyPut = e.target.closest('[data-dutyput]');
   if (dutyPut) return putDuty([dutyPut.dataset.dutyput]);
+
+  if (e.target.id === 'autoClassify') {
+    return classifyReady(D.txns.filter((t) => t.status === 'pendingCategory'
+      && (t.type === 'expense' || t.type === 'income')));
+  }
 
   if (e.target.id === 'pingIngest') return pingIngest();
 

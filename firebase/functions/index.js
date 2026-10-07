@@ -157,7 +157,7 @@ async function takeOne(payload) {
   // 문자는 "현대 미래에셋 승인"인데 파서는 "미래에셋"만 남긴다. 여기서 등록한
   // 카드에 붙여 두지 않으면 청구액도 누적 대조도 그 거래를 못 본다.
   const card = matchCard(parsed.cardName, accounts);
-  const txn = buildTransaction(parsed, rawId, location, decision, txnRef.id, card, accounts);
+  const txn = buildTransaction(parsed, rawId, location, decision, txnRef.id, card, accounts, body);
 
   const batch = db.batch();
   batch.set(root.collection('raw').doc(rawId), { ...raw, txnId: txnRef.id });
@@ -183,7 +183,7 @@ async function takeOne(payload) {
   return { ...response, status: 'ok', kind: response.status };
 }
 
-function buildTransaction(parsed, rawId, location, decision, id, card, accounts = []) {
+function buildTransaction(parsed, rawId, location, decision, id, card, accounts = [], body = '') {
   const txn = {
     id,
     type: 'expense',
@@ -211,9 +211,28 @@ function buildTransaction(parsed, rawId, location, decision, id, card, accounts 
   };
 
   if (parsed.kind === 'deposit') {
+    // 들어온 돈을 다 급여로 두면 안 된다. 환급 · 정산 · 용돈이 급여에 섞여
+    // 수입이 부풀고, 고칠 자리도 찾기 어렵다. 급여라고 적혀 있을 때만 급여다.
+    // 나머지는 확인 탭에서 사람이 고른다.
+    const from = parsed.merchantRaw || '';
+    const salary = /급여|월급|상여|성과급|봉급/.test(`${from} ${body}`);
+    const mine = matchAccount(from, accounts);
+
     txn.type = 'income';
-    txn.categoryId = 'cat_salary';
-    txn.status = 'confirmed';
+    if (salary) {
+      txn.categoryId = 'cat_salary';
+      txn.status = 'confirmed';
+    } else if (mine) {
+      // 내 계좌에서 내 계좌로 왔다. 번 돈이 아니다.
+      txn.type = 'transfer';
+      txn.categoryId = 'cat_selftransfer';
+      txn.counterAccountId = mine.id;
+      txn.excludeFromBudget = true;
+      txn.status = 'confirmed';
+    } else {
+      txn.categoryId = null;
+      txn.status = 'pendingCategory';
+    }
   } else if (parsed.kind === 'withdrawal') {
     // 나간 돈이 다 쓴 돈은 아니다. 적금에 넣은 50만원을 지출로 세면 그달에
     // 50만원을 쓴 것이 되고 예산도 통계도 그만큼 부풀어 오른다.

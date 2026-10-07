@@ -73,6 +73,11 @@ export function classify(merchantRaw, ctx = {}) {
   return { categoryId: null, reason: 'no-match', merchantId: merchant?.id ?? null, nearby };
 }
 
+// 영문 낱말은 세 글자부터 대소문자를 가리지 않는다. 문자에 찍히는 이름은
+// "bhc치킨"처럼 소문자로 올 때가 있어 적어 둔 대문자와 안 맞는다.
+// 두 글자(CU · KT)는 가린다 — 영문 낱말 가운데에 우연히 들어가면 엉뚱한 데 걸린다.
+const CASE_FREE_MIN = 3;
+
 export function matchRule(rule, normalized, raw) {
   const pattern = String(rule.pattern || '');
   if (!pattern) return false;
@@ -80,8 +85,14 @@ export function matchRule(rule, normalized, raw) {
   switch (rule.matchType) {
     case 'exactMerchant':
       return normalized === normalizeMerchant(pattern);
-    case 'contains':
-      return String(raw || '').includes(pattern) || normalized.includes(pattern);
+    case 'contains': {
+      const text = String(raw || '');
+      if (pattern.length >= CASE_FREE_MIN && /[a-z]/i.test(pattern)) {
+        const low = pattern.toLowerCase();
+        return text.toLowerCase().includes(low) || normalized.toLowerCase().includes(low);
+      }
+      return text.includes(pattern) || normalized.includes(pattern);
+    }
     case 'regex':
       try { return new RegExp(pattern).test(String(raw || '')); } catch { return false; }
     default:

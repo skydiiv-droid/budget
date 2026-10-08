@@ -20,6 +20,7 @@ import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMon
          windowStart, hasOlderThan, paceShift } from './shared/ledger.js';
 import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf, matchCard } from './shared/accounts.js';
 import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
+import { netAmount } from './shared/settlement.js';
 import { trend, categoryBudgets, monthlyFixed } from './shared/ledger.js';
 import { search, knownTags, parseTags } from './shared/search.js';
 import { toCSV } from './shared/csv.js';
@@ -34,6 +35,7 @@ import { fixedStatus, lateFixed, parseKeywords, learnKeyword, knownKeyword,
          candidates as fixedCandidates }
   from './shared/fixed.js';
 import { classify, suggestKeyword } from './shared/classify.js';
+import { splitParts, hasSplit, cleanSplits, partIn, SPLIT_MAX } from './shared/splits.js';
 import { normalizeMerchant, parseAmount } from './shared/parse.js';
 import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
          CAT_VERSION, RULE_VERSION, ACCOUNT_VERSION, ACCOUNT_FIXES } from './shared/seed.js';
@@ -689,7 +691,7 @@ const catName = (id) => D.categories.find((c) => c.id === id)?.name ?? '미분�
 const catIcon = (id) => D.categories.find((c) => c.id === id)?.icon ?? '';
 
 /** 내려받는 목록도 두 단계로. 스무 칸을 평평하게 늘어놓으면 고를 수가 없다. */
-function catOptions(selected = '') {
+function catOptions(selected = '', opts = {}) {
   const opt = (c, label) =>
     `<option value="${c.id}"${c.id === selected ? ' selected' : ''}>${esc(label ?? c.name)}</option>`;
   let h = `<option value=""${selected ? '' : ' selected'}>지정 안 함</option>`;
@@ -699,7 +701,8 @@ function catOptions(selected = '') {
     h += `<optgroup label="${esc(m.name)}">${opt(m, `${m.name} 전체`)}`
        + kids.map((c) => opt(c)).join('') + '</optgroup>';
   }
-  const moved = movedCats();
+  // 조각은 지출 칸만 쓴다. 한 번 긁은 돈의 일부만 옮긴 돈인 경우는 없다.
+  const moved = opts.expenseOnly ? [] : movedCats();
   if (moved.length) {
     h += `<optgroup label="옮긴 돈 — 지출로 세지 않음">${moved.map((c) => opt(c)).join('')}</optgroup>`;
   }
@@ -1185,7 +1188,8 @@ function renderHistory() {
       h += `<div class="brk-sub"><span class="muted">하위 카테고리 없음</span></div>`;
     }
     // "식비 127,700" 만 보고는 뭘 줄여야 할지 모른다. 그 안을 열어 준다.
-    h += `<div class="brk-rows">${inCategory(rows, it.id).map(txRow).join('')}</div>`;
+    h += `<div class="brk-rows">${inCategory(rows, it.id)
+      .map(({ row, part }) => txRow(row, part)).join('')}</div>`;
   }
 
   if (b.skippedCount) {
@@ -1221,10 +1225,18 @@ function renderHistory() {
  * 쓰는 돈은 성격이 완전히 다른데, 달력으로만 보면 둘 다 그냥 "9월 19일"이다.
  * 이건 시중 가계부가 못 하는 일이다 — 근무표를 모르니까.
  */
-/** 그 큰 갈래에 속한 이 달 거래. 하위까지 다 끌어온다. */
+/**
+ * 그 큰 갈래에 속한 이 달 거래. 하위까지 다 끌어온다.
+ *
+ * 나눠 둔 거래는 한 갈래에만 속하지 않는다. 그 갈래에 들어간 몫만 들려 보낸다 —
+ * 식비를 열었는데 2만원이 찍혀 있으면 더해도 카드 합계와 안 맞는다.
+ */
 function inCategory(rows, mainId) {
   const under = new Set([mainId, ...D.categories.filter((c) => c.parentId === mainId).map((c) => c.id)]);
-  return rows.filter((r) => r.inStats && under.has(r.categoryId || 'cat_unknown'));
+  return rows
+    .filter((r) => r.inStats)
+    .map((r) => ({ row: r, part: partIn(r, under, r.net) }))
+    .filter((x) => x.part > 0);
 }
 
 function renderShifts(month) {
@@ -1264,21 +1276,82 @@ function renderShifts(month) {
   </div>`;
 }
 
-function txRow(r) {
+/**
+ * 거래 한 줄.
+ *
+ * `part` 를 주면 그 금액만 큰 글씨로 찍는다 — 카테고리별로 열어 본 목록에서는
+ * 그 카테고리에 들어간 몫이 2만원이 아니라 5천원이기 때문이다.
+ */
+function txRow(r, part = null) {
   const open = editTxn === r.id;
-  const cat = r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 미분류';
-  const note = [cat, r.cardName, r.moved ? '옮긴 돈 — 지출 아님' : (r.counted ? '' : '예산 제외'),
-                r.counted && !r.inStats ? '분석 제외' : '',
-                ...(r.tags || []).map((t) => `#${t}`), r.memo].filter(Boolean).join(' · ');
+  const split = hasSplit(r) && !r.moved;
+
+  // 나눠 둔 금액도 가려야 한다. 한 줄만 새면 가리기는 의미가 없다.
+  const bits = [split
+    ? splitParts(r, r.net).filter((p) => p.amount > 0)
+        .map((p) => `${esc(catName(p.categoryId))} <span class="num">${won(p.amount)}</span>`)
+        .join(' + ')
+    : esc(r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 미분류')];
+  for (const t of [r.cardName, r.moved ? '옮긴 돈 — 지출 아님' : (r.counted ? '' : '예산 제외'),
+                   r.counted && !r.inStats ? '분석 제외' : '',
+                   ...(r.tags || []).map((t) => `#${t}`), r.memo]) {
+    if (t) bits.push(esc(t));
+  }
 
   let h = `<button type="button" class="tx${r.counted ? '' : ' off'}${
       r.counted && !r.inStats ? ' nostat' : ''}"
     data-tx="${r.id}" data-hold="${r.id}" aria-expanded="${open}">
     <span class="grow">
       <span class="tx-name">${esc(r.merchantRaw || '(가맹점 미상)')}</span>
-      <span class="muted">${esc(note)}</span></span>
-    <span class="tx-amt">${won(r.net)}</span></button>`;
+      <span class="muted">${bits.join(' · ')}</span></span>
+    <span class="tx-amt">${won(part == null ? r.net : part)}${
+      part != null && part !== r.net
+        ? `<br><span class="muted num" style="font-weight:400">총 ${won(r.net)}</span>` : ''}</span></button>`;
   return open ? h + txEdit(r) : h;
+}
+
+/**
+ * 금액 나누기.
+ *
+ * 마트에서 2만원 긁었는데 5천원은 뜨개실이다. 거래를 둘로 쪼개면 카드사
+ * 누적 대조가 깨지므로 금액은 하나로 두고 카테고리 배분만 적어 둔다.
+ * 다 적지 않아도 된다 — 남은 금액은 이 거래의 카테고리로 간다.
+ *
+ * 입력칸이 든 자리라서 다시 그리지 않는다. 줄을 넣고 빼는 것도, 남은 금액을
+ * 고쳐 적는 것도 그 자리에서 DOM 만 손본다.
+ */
+function splitBox(r) {
+  const rows = splitParts(r, r.net).filter((p) => !p.rest);
+  const list = rows.length ? rows : [{ categoryId: '', amount: 0 }];
+  const rest = r.net - list.reduce((sum, p) => sum + p.amount, 0);
+
+  return `<details class="mini" data-splitbox="${r.id}"${hasSplit(r) ? ' open' : ''}>
+    <summary>금액 나누기${hasSplit(r) ? ` · ${rows.length + (rest > 0 ? 1 : 0)}칸` : ''}</summary>
+    <div class="muted" style="margin:2px 0 9px">한 번 결제한 금액을 카테고리 여러 칸으로
+      나눕니다. 총 지출과 카드사 대조는 달라지지 않습니다.</div>
+    <div data-splitrows="${r.id}">${list.map(splitRow).join('')}</div>
+    <div class="row" style="padding:7px 0">
+      <button type="button" class="linkbtn grow" style="text-align:left"
+        data-splitadd="${r.id}">+ 칸 추가</button>
+      <span class="muted">남은 금액
+        <b class="num" data-splitrest>${won(Math.max(0, rest))}</b>
+        → ${esc(catName(r.categoryId))}</span></div>
+    <div style="display:flex;gap:7px;margin-top:4px">
+      <button type="button" class="act primary" style="flex:1"
+        data-splitsave="${r.id}">나누기 저장</button>
+      ${hasSplit(r) ? `<button type="button" class="act ghost"
+        data-splitoff="${r.id}">해제</button>` : ''}</div>
+  </details>`;
+}
+
+/** 나누기 한 칸. 폼 밖이라 `name` 을 쓰지 않는다 — 겹치면 숨은 쪽 값이 잡힌다. */
+function splitRow(p = { categoryId: '', amount: 0 }) {
+  return `<div class="row" data-splitrow style="padding:4px 0;gap:7px">
+    <input class="num" data-splitamt inputmode="numeric" placeholder="0"
+      style="width:96px" value="${p.amount ? won(p.amount) : ''}">
+    <select data-splitcat class="grow">${catOptions(p.categoryId, { expenseOnly: true })}</select>
+    <button type="button" class="act ghost" data-splitdel
+      style="min-height:38px;padding:0 11px">✕</button></div>`;
 }
 
 /**
@@ -1302,6 +1375,9 @@ function txEdit(r) {
     <label class="check" data-also style="margin:11px 0 0" ${same ? '' : 'hidden'}>
       <input type="checkbox" data-alsopast>
       <span>기존 <b data-alsocount>${same}</b>건도 함께 변경</span></label>`;
+
+  // 한 결제를 카테고리 여러 칸으로 나눈다. 지출만, 옮긴 돈은 나눌 것이 없다.
+  if (r.type === 'expense' && !r.moved) h += `<div style="margin-top:11px">${splitBox(r)}</div>`;
 
   h += `<div class="hr"></div>
     <form data-txn="${r.id}">
@@ -1581,11 +1657,11 @@ function renderCheck() {
         <span class="big num" style="font-size:22px;color:var(--warn-mark)">${won(Math.abs(c.gap))}</span></div>
       <div class="note ${c.missing ? 'warn' : 'ok'}" style="margin:13px 0 0">${c.missing
         ? `문자가 수신되지 않은 결제가 <b class="num">${won(c.missing)}</b> 있습니다.
-           위에서 해당 문자를 붙여 넣으면 보완됩니다.`
+           위에서 해당 문자를 붙여 넣거나, 아래에서 직접 등록하면 보완됩니다.`
         : `앱에 <b class="num">${won(c.extra)}</b>이 더 집계돼 있습니다.
            취소 건이 반영되지 않았거나 같은 결제가 중복 등록됐을 수 있습니다.`}
         <br><span class="muted">${esc(String(c.at).slice(5, 16).replace('T', ' '))} 문자 기준</span></div>
-      ${gapWindow(c)}</div>`;
+      ${gapWindow(c)}${gapFill(c)}</div>`;
   }
 
   for (const b of banks) {
@@ -1602,6 +1678,44 @@ function renderCheck() {
       <div class="muted" style="margin-top:9px">${esc(String(b.at).slice(5, 16).replace('T', ' '))} 수신 문자 기준입니다.</div></div>`;
   }
   return h;
+}
+
+/**
+ * 빈 금액을 직접 채운다.
+ *
+ * 문자를 못 받은 결제는 문자를 찾아 붙여 넣는 수밖에 없었다. 지난 문자를
+ * 찾아 오는 일이 제일 번거롭다 — 기억은 나는데 문자가 없는 경우도 있다.
+ *
+ * 그래서 **금액만 적어 채운다.** 한 건으로 다 채울 필요도 없다. 5,000원을
+ * 넣으면 남은 빵꾸가 10,000원으로 줄고, 10,000원을 또 넣으면 0이 되어
+ * 이 카드가 목록에서 사라진다. 기억나는 것부터 적어 가면 된다.
+ *
+ * 날짜는 **어긋난 구간 안**으로 잡는다. 그 뒤로 적으면 이 문자 시점의
+ * 누적에는 안 들어가 빵꾸가 그대로 남는다 — 넣었는데 안 줄어드는 것처럼 보인다.
+ */
+function gapFill(c) {
+  if (!c.missing) return '';
+  const day = String(c.since?.at || c.at).slice(0, 10);
+
+  return `<div class="hr"></div>
+    <form data-gapfill="${c.key}">
+      <div class="row" style="padding:0 0 7px">
+        <span class="lbl grow">빠진 금액 직접 등록</span>
+        <span class="muted">남은 금액 <b class="num">${won(c.missing)}</b></span></div>
+      <div class="fields">
+        <div class="field" style="margin:0"><label>금액</label>
+          <input name="amount" inputmode="numeric" placeholder="${won(c.missing)}"></div>
+        <div class="field" style="margin:0"><label>가맹점</label>
+          <input name="merchantRaw" placeholder="어디서 썼는지"></div></div>
+      <div class="fields">
+        <div class="field" style="margin:0"><label>날짜</label>
+          <input name="day" type="date" value="${day}"></div>
+        <div class="field" style="margin:0"><label>카테고리</label>
+          <select name="categoryId">${catOptions('', { expenseOnly: true })}</select></div></div>
+      <button type="submit" class="act primary" style="width:100%;margin-top:11px">추가</button>
+      <div class="muted" style="margin-top:8px">남은 금액이 0이 되면 이 카드는 목록에서 사라집니다.
+        한 번에 다 채우지 않아도 됩니다.</div>
+    </form>`;
 }
 
 /**
@@ -2651,6 +2765,69 @@ async function pickCategory(txnId, categoryId, box) {
     heavy ? () => undoPick(back) : null);
 }
 
+/** 그 시각보다 몇 초 앞. 누적 대조는 문자 시각까지만 세므로 그 안으로 넣어야 한다. */
+function beforeBy(at, seconds) {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return String(at);
+  d.setSeconds(d.getSeconds() - seconds);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** 나누기 칸이 든 자리. */
+const $box = (id) => document.querySelector(`[data-splitrows="${id}"]`);
+
+/** 지금 칸에 적힌 것들. */
+function readSplit(id) {
+  const box = $box(id);
+  if (!box) return [];
+  return [...box.querySelectorAll('[data-splitrow]')].map((row) => ({
+    amount: parseAmount(row.querySelector('[data-splitamt]')?.value) || 0,
+    categoryId: row.querySelector('[data-splitcat]')?.value || '',
+  }));
+}
+
+/**
+ * 남은 금액만 고쳐 적는다.
+ *
+ * 다시 그리지 않는다 — 입력칸이 새것으로 갈리면 치고 있던 숫자가 날아간다.
+ */
+function syncSplit(id) {
+  if (!id) return;
+  const txn = D.txns.find((t) => t.id === id);
+  const box = $box(id);
+  const out = box?.closest('[data-splitbox]')?.querySelector('[data-splitrest]');
+  if (!txn || !out) return;
+
+  const net = netAmount(txn, D.settlements);
+  const rest = net - readSplit(id).reduce((s, p) => s + p.amount, 0);
+  out.textContent = won(Math.abs(rest));
+  // 총액을 넘겼으면 그 자리에서 말해 준다. 저장할 때까지 기다리게 하지 않는다.
+  out.style.color = rest < 0 ? 'var(--warn-mark)' : '';
+  const label = out.parentElement;
+  if (label) {
+    label.firstChild.textContent = rest < 0 ? '초과 ' : '남은 금액 ';
+  }
+}
+
+/** 나눠 둔 것을 저장한다. 합이 금액을 넘는 것만 막는다. */
+async function saveSplit(id) {
+  const txn = D.txns.find((t) => t.id === id);
+  if (!txn) return;
+  const net = netAmount(txn, D.settlements);
+  const { ok, reason, over, splits, rest } = cleanSplits(readSplit(id), net);
+
+  if (reason === 'over') return toast(`나눈 금액이 결제액보다 ${won(over)} 많습니다`);
+  if (!ok) return toast(`칸은 ${SPLIT_MAX}개까지 나눌 수 있습니다`);
+
+  dropOlder();
+  await updateDoc(doc(col('txns'), id), { splits });
+  await refresh();
+  if (!splits.length) return toast('나누기를 해제했습니다');
+  toast(`${splits.length}칸으로 나눴습니다${
+    rest > 0 ? ` — 남은 금액은 ${catName(txn.categoryId)}` : ''}`);
+}
+
 /** 카테고리 지정을 되돌린다. 거래도, 그때 만든 규칙도 제자리로 보낸다. */
 async function undoPick(back) {
   dropOlder();
@@ -2763,9 +2940,14 @@ async function deleteCategory(id) {
   const rules = D.rules.filter((r) => r.categoryId === id);
   const shops = D.merchants.filter((m) => m.defaultCategoryId === id);
   const fixed = D.recurring.filter((r) => r.categoryId === id);
+  // 나눠 둔 조각도 이 칸을 가리킨다. 안 옮기면 지워진 칸을 가리킨 채 남아
+  // 그 금액이 카테고리별 집계에서 미분류로 떨어진다.
+  const cut = D.txns.filter((t) => (t.splits || []).some((p) => p?.categoryId === id));
   dropOlder();                       // 옛 거래도 이 카테고리를 쓰고 있었을 수 있다
   const moves = [
     ...txns.map((t) => (b) => b.update(doc(col('txns'), t.id), { categoryId: to })),
+    ...cut.map((t) => (b) => b.update(doc(col('txns'), t.id), {
+      splits: t.splits.map((p) => (p?.categoryId === id ? { ...p, categoryId: to } : p)) })),
     ...rules.map((r) => (b) => b.update(doc(col('rules'), r.id), { categoryId: to })),
     ...shops.map((m) => (b) => b.update(doc(col('merchants'), m.id), { defaultCategoryId: to })),
     ...fixed.map((r) => (b) => b.update(doc(col('recurring'), r.id), { categoryId: to })),
@@ -2775,6 +2957,7 @@ async function deleteCategory(id) {
   // 무게가 다르므로 나눠서 말한다.
   const parts = [
     txns.length && `결제 ${txns.length}건`,
+    cut.length && `나눠 둔 조각 ${cut.length}건`,
     rules.length && `자동 분류 규칙 ${rules.length}개`,
     shops.length && `가맹점 규칙 ${shops.length}개`,
     fixed.length && `고정지출 ${fixed.length}개`,
@@ -3313,6 +3496,38 @@ document.addEventListener('click', guard(async (e) => {
   const dutyPut = e.target.closest('[data-dutyput]');
   if (dutyPut) return putDuty([dutyPut.dataset.dutyput]);
 
+  // ── 금액 나누기 ───────────────────────────────────────
+  // 입력칸이 든 자리를 다시 그리면 치고 있던 것이 날아간다. DOM 만 손본다.
+  const splitAdd = e.target.closest('[data-splitadd]');
+  if (splitAdd) {
+    const box = $box(splitAdd.dataset.splitadd);
+    if (!box) return;
+    if (box.querySelectorAll('[data-splitrow]').length >= SPLIT_MAX) {
+      return toast(`칸은 ${SPLIT_MAX}개까지 나눌 수 있습니다`);
+    }
+    box.insertAdjacentHTML('beforeend', splitRow());
+    return syncSplit(splitAdd.dataset.splitadd);
+  }
+
+  const splitDel = e.target.closest('[data-splitdel]');
+  if (splitDel) {
+    const row = splitDel.closest('[data-splitrow]');
+    const id = row?.closest('[data-splitrows]')?.dataset.splitrows;
+    row?.remove();
+    return syncSplit(id);
+  }
+
+  const splitSave = e.target.closest('[data-splitsave]');
+  if (splitSave) return saveSplit(splitSave.dataset.splitsave);
+
+  const splitOff = e.target.closest('[data-splitoff]');
+  if (splitOff) {
+    dropOlder();
+    await updateDoc(doc(col('txns'), splitOff.dataset.splitoff), { splits: [] });
+    await refresh();
+    return toast('나누기를 해제했습니다');
+  }
+
   if (e.target.id === 'autoClassify') {
     return classifyReady(D.txns.filter((t) => t.status === 'pendingCategory'
       && (t.type === 'expense' || t.type === 'income')));
@@ -3398,6 +3613,9 @@ document.addEventListener('input', (e) => {
     renderHistory();
     return;
   }
+  if (e.target.matches('[data-splitamt]')) {
+    return syncSplit(e.target.closest('[data-splitrows]')?.dataset.splitrows);
+  }
   if (e.target.id !== 'ruleFilter') return;
   const q = e.target.value.trim();
   for (const el of document.querySelectorAll('[data-rulekey]')) {
@@ -3454,6 +3672,43 @@ document.addEventListener('submit', guard(async (e) => {
     closeQuick();
     await refresh();
     return toast(`${{ expense: '지출', income: '수입', transfer: '이체' }[kind]} ${won(amount)} 등록했습니다`);
+  }
+
+  // 카드사 누적과 안 맞는 금액을 직접 채운다. 한 번에 다 채우지 않아도 된다.
+  if (form.dataset.gapfill) {
+    const card = cardCheck({ anchors: D.anchors, transactions: D.txns, accounts: D.accounts })
+      .find((c) => c.key === form.dataset.gapfill);
+    if (!card) return toast('이미 맞춰졌습니다');
+
+    const amount = parseAmount(values.amount) || card.missing;
+    if (!amount || amount <= 0) return toast('금액을 입력하세요');
+
+    // 이 문자 시점의 누적과 견주는 것이므로 그보다 늦게 적으면 빵꾸가 안 줄어든다.
+    const day = String(values.day || '').slice(0, 10) || String(card.at).slice(0, 10);
+    const wanted = `${day}T12:00:00`;
+    const occurredAt = wanted <= String(card.at) ? wanted : beforeBy(card.at, 60);
+
+    const ref = doc(col('txns'));
+    const account = D.accounts.find((a) => a.id === card.accountId);
+    dropOlder();
+    await setDoc(ref, {
+      id: ref.id, type: 'expense', amount, currency: 'KRW', occurredAt,
+      merchantRaw: String(values.merchantRaw || '').trim() || '문자 미수신 결제',
+      categoryId: values.categoryId || null,
+      accountId: card.accountId || '',
+      cardName: account?.name || card.name || '',
+      status: values.categoryId ? 'confirmed' : 'pendingCategory',
+      // 문자를 못 받아 사람이 적어 넣은 건이다. 나중에 문자가 들어오면
+      // 같은 결제가 둘이 되므로, 어디서 온 건지 남겨 둬야 가려낼 수 있다.
+      source: 'gapfill',
+      excludeFromBudget: false, lat: null, lon: null, settlementId: null,
+    });
+    await refresh();
+
+    const left = cardCheck({ anchors: D.anchors, transactions: D.txns, accounts: D.accounts })
+      .find((c) => c.key === form.dataset.gapfill);
+    if (!left || left.ok) return toast('카드사 누적과 맞았습니다');
+    return toast(`등록했습니다 — 남은 금액 ${won(left.missing || left.extra)}`);
   }
 
   if (form.dataset.txn) {

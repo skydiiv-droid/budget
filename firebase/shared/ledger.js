@@ -16,6 +16,7 @@ import { netAmount } from './settlement.js';
 import { rollup } from './accounts.js';
 import { prevBusinessDay } from './holidays.js';
 import { transferCats, isMoved } from './categories.js';
+import { splitParts } from './splits.js';
 
 /**
  * 한 주기의 처음과 끝.
@@ -175,8 +176,12 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
     if (matchRecurring(t, recurring, accounts)) actualFixed += net;
     else actualVariable += net;
 
-    const key = t.categoryId || 'cat_unknown';
-    byCategory[key] = (byCategory[key] || 0) + net;
+    // 나눠 둔 거래는 조각마다 제 칸으로. 합은 언제나 net 이라 총액은 그대로다.
+    for (const part of splitParts(t, net)) {
+      if (part.amount <= 0) continue;
+      const key = part.categoryId || 'cat_unknown';
+      byCategory[key] = (byCategory[key] || 0) + part.amount;
+    }
   }
 
   // ── 계획 ────────────────────────────────────────────────
@@ -276,6 +281,9 @@ export function monthSpending(data = {}, yyyymm, now = new Date()) {
       const away = isMoved(t, moved);
       return {
         ...t, net, moved: away,
+        // 한 결제를 카테고리 여러 칸으로 나눠 둘 수 있다. 금액은 하나이므로
+        // 총액은 안 달라지고 카테고리별 집계만 나뉜다.
+        parts: away ? [] : splitParts(t, net),
         counted: !away && !t.excludeFromBudget && net > 0,
         // 총액에는 남기고 **분석에서만** 빼는 건이 있다. 경조사 한 번, 병원비
         // 한 번에 카테고리 그림과 근무별 평균이 통째로 일그러지는데, 총액에서
@@ -305,21 +313,26 @@ export function breakdown(rows = [], categories = []) {
   for (const r of rows) {
     if (r.counted && !r.inStats) { skipped += r.net; skippedCount += 1; }
     if (!r.inStats) continue;
-    const c = find(r.categoryId);
-    const mainId = c ? (c.parentId || c.id) : (r.categoryId || 'cat_unknown');
 
-    const m = mains.get(mainId) || { id: mainId, amount: 0, count: 0, subs: new Map() };
-    m.amount += r.net;
-    m.count += 1;
+    // 나눠 둔 거래는 조각마다 제 칸으로 들어간다. 안 나눈 것은 조각이 하나다.
+    for (const part of r.parts || splitParts(r, r.net)) {
+      if (part.amount <= 0) continue;
+      const c = find(part.categoryId);
+      const mainId = c ? (c.parentId || c.id) : (part.categoryId || 'cat_unknown');
 
-    if (c?.parentId) {
-      const s = m.subs.get(c.id) || { id: c.id, amount: 0, count: 0 };
-      s.amount += r.net;
-      s.count += 1;
-      m.subs.set(c.id, s);
+      const m = mains.get(mainId) || { id: mainId, amount: 0, count: 0, subs: new Map() };
+      m.amount += part.amount;
+      m.count += 1;
+
+      if (c?.parentId) {
+        const s = m.subs.get(c.id) || { id: c.id, amount: 0, count: 0 };
+        s.amount += part.amount;
+        s.count += 1;
+        m.subs.set(c.id, s);
+      }
+      mains.set(mainId, m);
+      total += part.amount;
     }
-    mains.set(mainId, m);
-    total += r.net;
   }
 
   const items = [...mains.values()]

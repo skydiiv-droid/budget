@@ -34,6 +34,8 @@ export function search(query, data = {}) {
       const hay = [
         t.merchantRaw, normalizeMerchant(t.merchantRaw), t.memo,
         ...(t.tags || []), name(t.categoryId), t.cardName,
+        // 나눠 둔 조각의 카테고리로도 찾을 수 있어야 한다
+        ...(Array.isArray(t.splits) ? t.splits.map((s) => name(s?.categoryId)) : []),
         String(t.occurredAt || '').slice(0, 10),
       ].map(norm).join('|');
       const num = digits(t.amount);

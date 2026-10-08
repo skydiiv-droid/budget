@@ -474,3 +474,47 @@ test('예산에서 뺀 건은 분석 제외분으로 또 세지 않는다', () =
   assert.equal(b.skipped, 0, '총액에도 없던 건이라 "뺐다"고 말할 게 아니다');
   assert.equal(b.total, 30_000);
 });
+
+test('나눠 둔 결제는 카테고리마다 제 몫만 센다', () => {
+  // 마트에서 2만원 긁었는데 5천원은 뜨개실(취미)이다.
+  const data = {
+    transactions: [{ id: 't1', type: 'expense', amount: 20_000, status: 'confirmed',
+      occurredAt: '2026-09-10T12:00:00', merchantRaw: '이마트',
+      categoryId: 'cat_grocery', splits: [{ categoryId: 'cat_hobby', amount: 5_000 }] }],
+    categories: [
+      { id: 'cat_food', name: '식비', kind: 'expense' },
+      { id: 'cat_grocery', name: '마트', parentId: 'cat_food', kind: 'expense' },
+      { id: 'cat_leisure', name: '여가', kind: 'expense' },
+      { id: 'cat_hobby', name: '취미', parentId: 'cat_leisure', kind: 'expense' },
+    ],
+  };
+
+  const rows = monthSpending(data, '2026-09', new Date('2026-09-20T12:00:00'));
+  // 총액은 1원도 안 달라진다 — 카드사는 2만원 하나로 센다
+  assert.equal(rows[0].net, 20_000);
+  assert.equal(rows[0].counted, true);
+
+  const b = breakdown(rows, data.categories);
+  assert.equal(b.total, 20_000, '카테고리 합은 총액과 같다');
+  assert.deepEqual(b.items.map((i) => [i.id, i.amount]),
+    [['cat_food', 15_000], ['cat_leisure', 5_000]]);
+
+  const l = ledger(data, '2026-09', new Date('2026-09-20T12:00:00'));
+  assert.equal(l.actual.byCategory.cat_grocery, 15_000);
+  assert.equal(l.actual.byCategory.cat_hobby, 5_000);
+  assert.equal(l.actual.variable, 20_000, '변동비 총액은 그대로다');
+});
+
+test('나눠 둔 건을 분석에서 빼면 조각도 다 빠진다', () => {
+  const data = {
+    transactions: [{ id: 't1', type: 'expense', amount: 20_000, status: 'confirmed',
+      occurredAt: '2026-09-10T12:00:00', categoryId: 'cat_grocery', excludeFromStats: true,
+      splits: [{ categoryId: 'cat_hobby', amount: 5_000 }] }],
+    categories: [{ id: 'cat_grocery', name: '마트', kind: 'expense' },
+                 { id: 'cat_hobby', name: '취미', kind: 'expense' }],
+  };
+  const rows = monthSpending(data, '2026-09', new Date('2026-09-20T12:00:00'));
+  const b = breakdown(rows, data.categories);
+  assert.equal(b.total, 0);
+  assert.equal(b.skipped, 20_000, '총 지출에는 남는다');
+});

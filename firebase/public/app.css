@@ -262,3 +262,7 @@ th{font-weight:600;color:var(--ink2);white-space:nowrap}
 .toast-undo{margin-left:12px;background:none;border:0;padding:2px 0;cursor:pointer;
   color:var(--on-dark-link);font-size:13px;font-weight:700;font-family:inherit;
   text-decoration:underline;text-underline-offset:2px}
+
+/* 금액 나누기 — 한 결제를 카테고리 여러 칸으로 */
+[data-splitrow] input{margin:0}
+[data-splitrow] select{margin:0;min-width:0}

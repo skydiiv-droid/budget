@@ -19,11 +19,12 @@ import {
 import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMonth, pace,
          windowStart, hasOlderThan, paceShift, salaryHistory, spendRow } from './shared/ledger.js';
 import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf, matchCard } from './shared/accounts.js';
-import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
+import { findOriginal, openCancels, voidPatch, settledPatch,
+         findPartial, partialPatch, partlyCancelled } from './shared/cancel.js';
 import { netAmount } from './shared/settlement.js';
 import { trend, categoryBudgets, monthlyFixed } from './shared/ledger.js';
 import { search, knownTags, parseTags } from './shared/search.js';
-import { toCSV } from './shared/csv.js';
+import { toCSV, fromCSV, csvKey } from './shared/csv.js';
 import { detectRecurring } from './shared/detect.js';
 import { parseShiftText, shiftText, shiftStats, SHIFT_LABEL } from './shared/shifts.js';
 import { findDuties, dutyPeople, dutiesOf, toShifts, dutyEndpoint, monthInUrl }
@@ -42,6 +43,14 @@ import { categoryDocs, ruleDocs, merchantDocs, accountDocs, SETTINGS,
 
 const $ = (id) => document.getElementById(id);
 const won = (n) => Number(n || 0).toLocaleString('ko-KR');
+/**
+ * 묻는 창에 넣을 금액.
+ *
+ * `confirm` 은 브라우저가 그리는 창이라 CSS 로 가릴 수 없다. 가리기를 켜 둔
+ * 채로 금액을 띄우면 **화면 가운데에 그 숫자만 남는다** — 어깨너머로 보이지
+ * 말라고 만든 기능인데 가장 잘 보이는 자리에서 새는 셈이다.
+ */
+const shy = (n) => (document.body.classList.contains('masked') ? '○○○' : won(n));
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -1347,11 +1356,15 @@ function txRow(r, opts = {}) {
   const fx = r.fxCurrency && r.fxAmount ? `${r.fxCurrency} ${r.fxAmount}` : '';
   // 할부는 카드값이 달마다 나뉘어 빠진다. 일시불과 같아 보이면 안 된다.
   const plan = Number(r.installmentMonths) >= 2 ? `${r.installmentMonths}개월 할부` : '';
+  // 일부 취소된 건. 금액만 보면 왜 그 금액인지 알 수 없다.
+  const cut = partlyCancelled(r)
+    ? `일부 취소 <span class="num">${won(r.cancelledAmount)}</span>` : '';
   for (const t of [r.cardName, fx, plan, label,
                    r.counted && !r.inStats ? '분석 제외' : '',
                    ...(r.tags || []).map((t) => `#${t}`), r.memo]) {
     if (t) bits.push(esc(t));
   }
+  if (cut) bits.push(cut);
 
   let h = `<button type="button" class="tx${income || r.counted ? '' : ' off'}${
       r.counted && !r.inStats ? ' nostat' : ''}"
@@ -1565,10 +1578,27 @@ function renderInbox() {
           <span class="big num" style="font-size:22px">${won(c.amount)}</span></div>`;
 
       if (!candidates.length) {
+        // 금액이 같은 것이 없으면 **일부만 취소된 것**일 수 있다. 3만원 긁고
+        // 1만원만 환불되는 일이 있다. 금액이 큰 결제를 후보로 내준다 —
+        // 안 맞물리면 원결제가 전액으로 남아 카드사 누적과 안 맞는다.
+        const bigger = findPartial(c, D.txns).slice(0, 5);
         h += `<div class="note warn" style="margin:13px 0 0">같은 금액의 결제를 찾지 못했습니다.<br>
-          원결제가 아직 수신되지 않았거나 다른 카드일 수 있습니다.</div>
-          <button type="button" class="act ghost" style="width:100%;margin-top:9px"
-            data-dropcancel="${c.id}">이 취소 건 보류</button></div>`;
+          ${bigger.length
+            ? '일부만 취소된 것일 수 있습니다. 아래에서 고르면 그 금액만 깎습니다.'
+            : '원결제가 아직 수신되지 않았거나 다른 카드일 수 있습니다.'}</div>`;
+
+        for (const o of bigger) {
+          const days = Math.round((new Date(c.occurredAt) - new Date(o.occurredAt)) / 86400000);
+          h += `<button type="button" class="item" style="width:100%;text-align:left;background:none;border-top:0;border-left:0;border-right:0;cursor:pointer"
+            data-partial="${c.id}:${o.id}">
+            <span class="grow"><span style="font-size:13.5px;font-weight:600">${esc(o.merchantRaw || '(가맹점 미상)')}</span><br>
+              <span class="muted">${esc(String(o.occurredAt).slice(5, 10))} · ${
+                days === 0 ? '같은 날' : `${days}일 전`} · 깎으면 <span class="num">${
+                won(Number(o.amount) - Number(c.amount))}</span></span></span>
+            <span class="num" style="font-size:14px;font-weight:600">${won(o.amount)}</span></button>`;
+        }
+        h += `<button type="button" class="act ghost" style="width:100%;margin-top:11px"
+            data-dropcancel="${c.id}">해당 없음 — 이 취소 건 보류</button></div>`;
         continue;
       }
 
@@ -2356,6 +2386,13 @@ function renderSetup() {
   const etc = `<div class="muted" style="margin-bottom:10px">엑셀이나 다른 가계부에서 열 수 있는 형식으로 내보냅니다.</div>
     <button type="button" class="act tint" style="width:100%;margin-bottom:9px" id="exportCsv">
       내역 내보내기 (CSV)</button>
+    ${/* 내보내기만 있으면 그 파일은 종이 쪼가리다. 기기를 바꾸거나 계정이
+         꼬였을 때 되돌릴 길이 그것뿐인데 들일 데가 없었다. */''}
+    <label class="act ghost" style="width:100%;margin-bottom:9px;display:block;text-align:center;
+      line-height:22px;cursor:pointer">내역 불러오기 (CSV)
+      <input type="file" id="importCsv" accept=".csv,text/csv" class="filein"></label>
+    <div class="muted" style="margin-bottom:12px">내보낸 파일을 그대로 넣습니다.
+      이미 있는 건은 빼고 넣으며, 넣은 뒤 되돌릴 수 있습니다.</div>
     <div style="display:flex;gap:7px">
       <a class="act ghost" href="/data" style="flex:1;text-align:center;text-decoration:none;line-height:22px">원본 데이터</a>
       <button type="button" class="act ghost" id="signout" style="flex:1">로그아웃</button>
@@ -3238,6 +3275,51 @@ async function saveDoc(kind, values) {
  * 토큰 없이 보내면 함수가 unauthorized 로 되받는데, 그 대답이 오는 것 자체가
  * 주소가 살아 있다는 뜻이다. 주소를 손으로 옮겨 적기 전에 확인하는 게 낫다.
  */
+/**
+ * 내보낸 CSV 를 다시 들인다.
+ *
+ * 되돌리기용이다. 그래서 **이미 있는 건은 빼고** 넣는다 — 두 번 들이면 지출이
+ * 두 배가 되고, 그걸 되돌리는 길은 하나하나 지우는 것뿐이다.
+ * 넣기 전에 몇 건이 들어가고 몇 건이 빠지는지 먼저 말한다.
+ */
+async function importCsv(file) {
+  if (!file) return;
+  const text = await file.text().catch(() => '');
+  if (!text) return toast('파일을 읽지 못했습니다');
+
+  const { rows, skipped, note } = fromCSV(text,
+    { categories: D.categories, accounts: D.accounts });
+  if (note) return toast(note);
+  if (!rows.length) return toast('들일 내역이 없습니다');
+
+  // 창 밖의 옛 거래와도 견줘야 한다. 안 읽어 온 것과 없는 것은 다르다.
+  if (D.hasOlder) await loadAll('내역 불러오기');
+  const have = new Set(D.txns.map(csvKey));
+  const fresh = rows.filter((r) => !have.has(csvKey(r)));
+
+  const lines = [`${rows.length}건을 읽었습니다.`,
+    `${fresh.length}건을 넣습니다.`,
+    rows.length - fresh.length ? `${rows.length - fresh.length}건은 이미 있어 넘깁니다.` : '',
+    skipped ? `${skipped}줄은 날짜나 금액이 없어 읽지 못했습니다.` : ''].filter(Boolean);
+  if (!fresh.length) return toast(lines.join(' '));
+  if (!confirm(`${lines.join('\n')}\n\n넣을까요?`)) return;
+
+  dropOlder();
+  const made = [];
+  await commitAll(fresh.map((r) => (b) => {
+    const ref = doc(col('txns'));
+    made.push(ref.id);
+    b.set(ref, { ...r, id: ref.id, source: 'csv', settlementId: null, lat: null, lon: null });
+  }));
+  await refresh();
+  toast(`${made.length}건을 넣었습니다`, async () => {
+    dropOlder();
+    await commitAll(made.map((id) => (b) => b.delete(doc(col('txns'), id))));
+    await refresh();
+    toast(`${made.length}건을 되돌렸습니다`);
+  });
+}
+
 /** 내보내기. 파일로 떨어뜨려 놓으면 어디서든 연다. */
 async function exportCsv() {
   // 반쪽짜리 파일을 내보내면 받은 사람은 그게 전부인 줄 안다.
@@ -3552,6 +3634,26 @@ document.addEventListener('click', guard(async (e) => {
     return toast(`${o.merchantRaw || '해당 결제'} 를 취소 처리했습니다`);
   }
 
+  // 일부만 취소된 건. 금액을 깎고 원래 금액을 남긴다.
+  const partial = e.target.closest('[data-partial]');
+  if (partial) {
+    const [cancelId, originalId] = partial.dataset.partial.split(':');
+    const c = D.txns.find((t) => t.id === cancelId);
+    const o = D.txns.find((t) => t.id === originalId);
+    if (!c || !o) return;
+    const cut = Number(c.amount || 0);
+    if (!confirm(`「${o.merchantRaw || '해당 결제'}」 ${shy(o.amount)} 에서 ${shy(cut)}을 깎습니다.`
+      + `\n\n남는 금액 ${shy(Number(o.amount) - cut)}.`)) return;
+
+    dropOlder();
+    await commitAll([
+      (b) => b.update(doc(col('txns'), o.id), partialPatch(o, c)),
+      (b) => b.update(doc(col('txns'), c.id), settledPatch(o)),
+    ]);
+    await refresh();
+    return toast(`${won(cut)}을 깎았습니다 — 남은 금액 ${won(Number(o.amount) - cut)}`);
+  }
+
   const dropCancel = e.target.closest('[data-dropcancel]');
   if (dropCancel) {
     dropOlder();
@@ -3753,6 +3855,12 @@ document.addEventListener('change', guard(async (e) => {
   }
   if (e.target.name === 'kind' && e.target.closest('[data-form="goal"]')) {
     return syncGoalForm();
+  }
+
+  if (e.target.id === 'importCsv') {
+    const file = e.target.files?.[0];
+    e.target.value = '';                 // 같은 파일을 다시 고를 수 있어야 한다
+    return importCsv(file);
   }
 
   if (e.target.matches('[data-dutyperson]')) {

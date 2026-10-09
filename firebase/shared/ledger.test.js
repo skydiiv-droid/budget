@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { windowStart, hasOlderThan, WINDOW_MONTHS, paceShift,
          ledger, matchRecurring, monthSpending, breakdown, shiftMonth, monthWindow,
-         sameSpanLastMonth, pace, trend, fixedDueIn, topSpending } from './ledger.js';
+         sameSpanLastMonth, pace, trend, fixedDueIn, topSpending,
+         salaryHistory, isSalaryCat } from './ledger.js';
 
 const NOW = new Date(2026, 8, 20, 12, 0);   // 2026-09-20
 const SETTINGS = { monthlyIncome: 2800000, variableBudget: 1300000, cycleStartDay: 1 };
@@ -517,4 +518,67 @@ test('나눠 둔 건을 분석에서 빼면 조각도 다 빠진다', () => {
   const b = breakdown(rows, data.categories);
   assert.equal(b.total, 0);
   assert.equal(b.skipped, 20_000, '총 지출에는 남는다');
+});
+
+// ── 월급이 달마다 다르다 ─────────────────────────────────
+
+const SAL = [{ id: 'cat_salary', name: '급여', kind: 'income' },
+             { id: 'cat_allowance', name: '수당', parentId: 'cat_salary', kind: 'income' },
+             { id: 'cat_settle_in', name: '정산입금', kind: 'income' }];
+const pay = (id, amount, at, categoryId = 'cat_salary') =>
+  ({ id, type: 'income', amount, occurredAt: at, categoryId, status: 'confirmed' });
+
+test('급여가 안 들어왔으면 등록값으로 버틴다', () => {
+  const L = run({ categories: SAL });
+  assert.equal(L.income.used, 2_800_000);
+  assert.equal(L.income.real, false);
+  assert.equal(L.planned.available, 2_800_000 - 1_300_000);
+});
+
+test('급여가 들어왔으면 등록값이 아니라 실제로 받은 것을 쓴다', () => {
+  // 등록은 280만인데 이 달은 수당이 적어 262만 들어왔다. 여력이 18만 적다.
+  const L = run({ categories: SAL,
+    transactions: [pay('i1', 2_620_000, '2026-09-05T09:00:00')] });
+  assert.equal(L.income.used, 2_620_000);
+  assert.equal(L.income.real, true);
+  assert.equal(L.planned.income, 2_800_000, '등록값도 따로 들고 있는다');
+  assert.equal(L.planned.available, 2_620_000 - 1_300_000);
+});
+
+test('수당이 따로 들어오면 합쳐 센다', () => {
+  const L = run({ categories: SAL, transactions: [
+    pay('i1', 2_300_000, '2026-09-05T09:00:00'),
+    pay('i2', 480_000, '2026-09-05T09:01:00', 'cat_allowance'),
+  ] });
+  assert.equal(L.income.used, 2_780_000);
+  assert.equal(L.income.salary, 2_780_000);
+});
+
+test('급여 아닌 입금만 들어온 달 초에 여력이 폭락하지 않는다', () => {
+  // 3일에 정산금 5만원. 이걸 이 달 수입으로 보면 여력이 마이너스가 된다.
+  const L = run({ categories: SAL,
+    transactions: [pay('i1', 50_000, '2026-09-03T09:00:00', 'cat_settle_in')] });
+  assert.equal(L.income.real, false);
+  assert.equal(L.income.used, 2_850_000, '등록값에 더한다 — 실제로 쓸 수 있는 돈이다');
+});
+
+test('최근 실제 급여를 달별로 돌려준다 — 가장 적은 달을 권한다', () => {
+  const data = { categories: SAL, settings: SETTINGS, transactions: [
+    pay('i1', 2_620_000, '2026-09-05T09:00:00'),
+    pay('i2', 2_480_000, '2026-08-05T09:00:00'),
+    pay('i3', 2_810_000, '2026-07-05T09:00:00'),
+    { id: 'x1', type: 'income', amount: 300_000, occurredAt: '2026-08-20T09:00:00',
+      categoryId: 'cat_settle_in', status: 'confirmed' },
+  ] };
+  const h = salaryHistory(data, 6, NOW);
+  assert.deepEqual(h.items.map((x) => x.month), ['2026-09', '2026-08', '2026-07']);
+  assert.equal(h.low, 2_480_000, '가장 적은 달로 잡아야 계획이 안 깨진다');
+  assert.equal(h.high, 2_810_000);
+  assert.equal(h.avg, 2_636_667);
+  assert.equal(h.items[1].amount, 2_480_000, '정산입금은 급여가 아니다');
+});
+
+test('급여 기록이 없으면 권할 것도 없다', () => {
+  assert.deepEqual(salaryHistory({ settings: SETTINGS }, 6, NOW),
+    { items: [], low: 0, high: 0, avg: 0 });
 });

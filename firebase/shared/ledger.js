@@ -86,6 +86,54 @@ export const hasOlderThan = (oldest, from) =>
   Boolean(oldest && from && String(oldest) < String(from));
 
 /**
+ * 급여 계열 카테고리. 수당과 상여도 급여다.
+ *
+ * 급여만 따로 세는 이유: 달 초에 정산금 5만원만 들어왔는데 그걸 이 달 수입으로
+ * 보면 갚을 여력이 폭락한다. 급여가 들어왔는지 아닌지를 알아야 등록값과
+ * 실제 중에 무엇을 쓸지 고를 수 있다.
+ */
+export const SALARY_ROOT = 'cat_salary';
+export const isSalaryCat = (id, categories = []) => {
+  if (!id) return false;
+  if (id === SALARY_ROOT) return true;
+  return categories.some((c) => c && c.id === id && c.parentId === SALARY_ROOT);
+};
+
+/**
+ * 최근 실제 급여.
+ *
+ * 3교대는 야간·초과 수당이 달마다 달라 월급이 고정이 아니다. 등록해 둔 한
+ * 숫자로 "몇 달이면 갚는다"를 말하면 그 숫자가 틀린 만큼 목표도 틀린다.
+ * 실제로 들어온 것을 달별로 보여 주고 **가장 적은 달**을 권한다 —
+ * 낙관적으로 잡으면 계획이 깨지고, 깨진 계획은 안 보게 된다.
+ */
+export function salaryHistory(data = {}, months = 6, now = new Date()) {
+  const { transactions = [], categories = [], settings = {} } = data;
+  const out = [];
+  const thisMonth = monthKey(now);
+
+  for (let i = 0; i < months; i++) {
+    const key = shiftMonth(thisMonth, -i);
+    const win = monthWindow(key, settings.cycleStartDay);
+    const amount = transactions
+      .filter((t) => t.type === 'income' && t.status !== 'voided')
+      .filter((t) => isSalaryCat(t.categoryId, categories))
+      .filter((t) => inWindow(t.occurredAt, win))
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    if (amount > 0) out.push({ month: key, amount });
+  }
+
+  if (!out.length) return { items: [], low: 0, high: 0, avg: 0 };
+  const list = out.map((x) => x.amount);
+  return {
+    items: out,                                   // 최근 것이 먼저
+    low: Math.min(...list),
+    high: Math.max(...list),
+    avg: Math.round(list.reduce((a, b) => a + b, 0) / list.length),
+  };
+}
+
+/**
  * 한 달에 나가는 고정비.
  *
  * 연 1회짜리(자동차보험 · 연회비)는 열두 달로 나눠 얹는다. 나가는 달에만
@@ -156,6 +204,9 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
 
   // ── 실제 ────────────────────────────────────────────────
   let actualIncome = 0;
+  // 급여는 달마다 다르다. 들어온 뒤에는 등록값이 아니라 실제로 받은 것을 쓴다.
+  let salaryGot = 0;
+  let otherGot = 0;
   let actualFixed = 0;
   let actualVariable = 0;
   const byCategory = {};
@@ -168,7 +219,13 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
     if (isMoved(t, moved)) continue;
     if (t.excludeFromBudget) continue;
 
-    if (t.type === 'income') { actualIncome += Number(t.amount || 0); continue; }
+    if (t.type === 'income') {
+      const got = Number(t.amount || 0);
+      actualIncome += got;
+      if (isSalaryCat(t.categoryId, categories)) salaryGot += got;
+      else otherGot += got;
+      continue;
+    }
 
     const net = netAmount(t, settlements);        // 돌려받은 만큼은 내 돈이 아니다
     if (net <= 0) continue;
@@ -188,7 +245,13 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
   const plannedIncome = Number(settings.monthlyIncome || 0);
   const plannedFixed = monthlyFixed(recurring);
   const variableBudget = Number(settings.variableBudget || 0);
-  const available = plannedIncome - plannedFixed - variableBudget;
+
+  // 급여가 들어왔으면 등록값은 더 볼 것이 없다 — 실제로 받은 것이 이 달의 수입이다.
+  // 아직 안 들어왔으면 등록값으로 버틴다. 급여 아닌 입금은 언제나 더한다.
+  // 등록값 하나로 버티면 수당이 적은 달에 "갚을 여력"이 부풀고, 그 숫자로
+  // "몇 달이면 정리된다"까지 말하게 된다.
+  const incomeUsed = (salaryGot > 0 ? salaryGot : plannedIncome) + otherGot;
+  const available = incomeUsed - plannedFixed - variableBudget;
 
   // ── 변동 예산 ───────────────────────────────────────────
   const daysLeft = Math.max(0, Math.round((win.end - now) / 86400000));
@@ -217,6 +280,9 @@ export function ledger(data = {}, yyyymm, now = new Date()) {
   return {
     month,
     planned: { income: plannedIncome, fixed: plannedFixed, variableBudget, available },
+    // 이 달 계산에 실제로 쓴 수입. 등록값인지 받은 것인지 화면이 말해 줘야 한다.
+    income: { used: incomeUsed, planned: plannedIncome,
+              salary: salaryGot, other: otherGot, real: salaryGot > 0 },
     actual: { income: actualIncome, fixed: actualFixed, variable: actualVariable, byCategory },
     budget: {
       limit: variableBudget,
@@ -274,24 +340,34 @@ export function monthSpending(data = {}, yyyymm, now = new Date()) {
 
   return transactions
     .filter((t) => t.status !== 'voided' && t.type === 'expense' && inWindow(t.occurredAt, win))
-    .map((t) => {
-      const net = netAmount(t, settlements);
-      // 옮긴 돈은 목록에는 남기되 세지 않는다. 아예 지우면 "그날 50만원이
-      // 어디 갔지" 하고 찾게 된다 — 옮겼다는 것도 봐야 하는 사실이다.
-      const away = isMoved(t, moved);
-      return {
-        ...t, net, moved: away,
-        // 한 결제를 카테고리 여러 칸으로 나눠 둘 수 있다. 금액은 하나이므로
-        // 총액은 안 달라지고 카테고리별 집계만 나뉜다.
-        parts: away ? [] : splitParts(t, net),
-        counted: !away && !t.excludeFromBudget && net > 0,
-        // 총액에는 남기고 **분석에서만** 빼는 건이 있다. 경조사 한 번, 병원비
-        // 한 번에 카테고리 그림과 근무별 평균이 통째로 일그러지는데, 총액에서
-        // 빼 버리면 카드사 누적과 안 맞아 "놓친 결제"로 뜬다.
-        inStats: !away && !t.excludeFromBudget && !t.excludeFromStats && net > 0,
-      };
-    })
+    .map((t) => spendRow(t, settlements, moved))
     .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));
+}
+
+/**
+ * 거래 하나를 화면이 읽을 모양으로.
+ *
+ * 화면은 `net` · `counted` · `inStats` 를 보고 줄을 그린다. 날거래를 그대로
+ * 넘기면 그 셋이 다 `undefined` 라 **금액이 0원으로 찍히고 예산 제외로 보인다.**
+ * 검색 결과가 그 상태였다. 잣대를 한 곳에 둔다.
+ */
+export function spendRow(t, settlements = [], moved = new Set()) {
+  const net = netAmount(t, settlements);
+  // 옮긴 돈은 목록에는 남기되 세지 않는다. 아예 지우면 "그날 50만원이
+  // 어디 갔지" 하고 찾게 된다 — 옮겼다는 것도 봐야 하는 사실이다.
+  const away = isMoved(t, moved);
+  const spend = t.type === 'expense';
+  return {
+    ...t, net, moved: away,
+    // 한 결제를 카테고리 여러 칸으로 나눠 둘 수 있다. 금액은 하나이므로
+    // 총액은 안 달라지고 카테고리별 집계만 나뉜다.
+    parts: away || !spend ? [] : splitParts(t, net),
+    counted: spend && !away && !t.excludeFromBudget && net > 0,
+    // 총액에는 남기고 **분석에서만** 빼는 건이 있다. 경조사 한 번, 병원비
+    // 한 번에 카테고리 그림과 근무별 평균이 통째로 일그러지는데, 총액에서
+    // 빼 버리면 카드사 누적과 안 맞아 "놓친 결제"로 뜬다.
+    inStats: spend && !away && !t.excludeFromBudget && !t.excludeFromStats && net > 0,
+  };
 }
 
 /**

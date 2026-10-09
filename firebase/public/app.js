@@ -17,7 +17,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMonth, pace,
-         windowStart, hasOlderThan, paceShift } from './shared/ledger.js';
+         windowStart, hasOlderThan, paceShift, salaryHistory, spendRow } from './shared/ledger.js';
 import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf, matchCard } from './shared/accounts.js';
 import { findOriginal, openCancels, voidPatch, settledPatch } from './shared/cancel.js';
 import { netAmount } from './shared/settlement.js';
@@ -791,8 +791,9 @@ function renderHome() {
   }
 
   // ── 이번 달 계산 ────────────────────────────────────────
+  const inc = D.ledger.income;
   h += `<div class="card"><div class="lbl" style="margin-bottom:11px">이번 달 수지</div>
-    ${flowRow('수입', planned.income, 'var(--up)', '+')}
+    ${flowRow(inc.real ? '수입 (실제 입금)' : '수입 (등록값)', inc.used, 'var(--up)', '+')}
     ${flowRow('고정지출', planned.fixed, 'var(--down)', '−')}
     ${flowRow('생활비 예산', planned.variableBudget, 'var(--down)', '−')}
     <div class="hr"></div>
@@ -947,7 +948,7 @@ function renderGoal(goal, debt, planned) {
   }
   h += '</div>';
 
-  if (!planned.income) {
+  if (!D.ledger.income.used) {
     h += `<div class="note warn">월 수입이 등록되지 않았습니다.<br>등록하면 예상 완료 시점이 표시됩니다.</div>`;
   } else if (goal.paceMonths === null) {
     h += `<div class="note warn"><b>현재 상환 여력이 없습니다.</b><br>
@@ -974,7 +975,7 @@ function renderGoal(goal, debt, planned) {
  */
 function renderShift(goal, planned) {
   const b = D.ledger.budget;
-  if (!b.limit || !planned.income) return '';
+  if (!b.limit || !D.ledger.income.used) return '';
 
   // 예산은 생활비에만 걸린 것이므로 견줄 것도 생활비 쪽 속도여야 한다.
   const run = pace(b.spent, D.ledger.month, D.settings.cycleStartDay);
@@ -1005,6 +1006,9 @@ function renderShift(goal, planned) {
 // ───────────────────────────────────────────────── 내역
 
 // 카테고리가 있어야 "저축으로 옮긴 돈"을 지출에서 뺄 수 있다
+/** 옮긴 돈으로 치는 카테고리. 목록을 그릴 때마다 같은 잣대를 써야 한다. */
+const movedSet = () => new Set(D.categories.filter((c) => c.kind === 'transfer').map((c) => c.id));
+
 const histData = () =>
   ({ transactions: D.txns, settlements: D.settlements, settings: D.settings,
      categories: D.categories });
@@ -1086,7 +1090,10 @@ function renderHistory() {
 
   // 찾는 중에는 달을 넘나들지 않는다. "그때 그 병원"이 몇 월인지 알면 안 찾는다.
   if (histQuery.trim()) {
-    const hits = search(histQuery, { transactions: D.txns, categories: D.categories });
+    // 날거래를 그대로 그리면 금액이 0원으로 찍힌다 — 목록이 보는 값은
+    // monthSpending 이 붙여 주는 것들이다. 검색도 같은 잣대를 거친다.
+    const hits = search(histQuery, { transactions: D.txns, categories: D.categories })
+      .map((t) => spendRow(t, D.settlements, movedSet()));
     const total = hits.reduce((sum, t) => sum + (t.type === 'expense' ? Number(t.amount || 0) : 0), 0);
     let f = '';
     if (!hits.length) {
@@ -1097,7 +1104,7 @@ function renderHistory() {
       f += `<div class="card">
         <div class="row"><span class="lbl grow">검색 결과 ${hits.length}건</span>
           <span class="num" style="font-size:15px;font-weight:700">${won(total)}</span></div></div>
-        <div class="card" style="padding:4px 16px">${hits.slice(0, 80).map(txRow).join('')}</div>`;
+        <div class="card" style="padding:4px 16px">${hits.slice(0, 80).map((r) => txRow(r)).join('')}</div>`;
       if (hits.length > 80) f += `<div class="muted" style="text-align:center;margin-top:8px">최근 80건만 표시합니다</div>`;
       f += olderNote('검색은 불러온 내역에서만 찾습니다.');
     }
@@ -1189,7 +1196,7 @@ function renderHistory() {
     }
     // "식비 127,700" 만 보고는 뭘 줄여야 할지 모른다. 그 안을 열어 준다.
     h += `<div class="brk-rows">${inCategory(rows, it.id)
-      .map(({ row, part }) => txRow(row, part)).join('')}</div>`;
+      .map(({ row, part }) => txRow(row, { part })).join('')}</div>`;
   }
 
   if (b.skippedCount) {
@@ -1212,7 +1219,7 @@ function renderHistory() {
     h += `<div class="day">
       <span class="day-date">${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAY[d.getDay()]})</span>
       <span class="day-sum">${won(sumCounted(list))}</span></div>
-      <div class="card" style="padding:4px 16px">${list.map(txRow).join('')}</div>`;
+      <div class="card" style="padding:4px 16px">${list.map((r) => txRow(r)).join('')}</div>`;
   }
 
   body.innerHTML = h;
@@ -1281,8 +1288,13 @@ function renderShifts(month) {
  *
  * `part` 를 주면 그 금액만 큰 글씨로 찍는다 — 카테고리별로 열어 본 목록에서는
  * 그 카테고리에 들어간 몫이 2만원이 아니라 5천원이기 때문이다.
+ *
+ * **둘째 인자는 객체로 받는다.** 숫자로 받던 때 `list.map(txRow)` 가 번호를
+ * 꽂아 넣어 금액 자리에 0 · 1 · 2 가 찍혔다. 객체로 받으면 번호가 들어와도
+ * `part` 가 없어 제 금액을 그린다. 한 번 겪었다.
  */
-function txRow(r, part = null) {
+function txRow(r, opts = {}) {
+  const part = typeof opts?.part === 'number' ? opts.part : null;
   const open = editTxn === r.id;
   const split = hasSplit(r) && !r.moved;
 
@@ -1292,19 +1304,27 @@ function txRow(r, part = null) {
         .map((p) => `${esc(catName(p.categoryId))} <span class="num">${won(p.amount)}</span>`)
         .join(' + ')
     : esc(r.categoryId ? `${catIcon(r.categoryId)} ${catName(r.categoryId)}` : '❓ 미분류')];
-  for (const t of [r.cardName, r.moved ? '옮긴 돈 — 지출 아님' : (r.counted ? '' : '예산 제외'),
+  // 수입과 취소는 지출이 아니라서 "예산 제외"라고 적으면 거짓말이 된다.
+  // 검색 결과에는 그런 줄이 섞여 나온다.
+  const income = r.type === 'income';
+  const label = r.moved ? '옮긴 돈 — 지출 아님'
+    : income ? '수입'
+    : r.type === 'cancel' ? '취소'
+    : (r.counted ? '' : '예산 제외');
+  for (const t of [r.cardName, label,
                    r.counted && !r.inStats ? '분석 제외' : '',
                    ...(r.tags || []).map((t) => `#${t}`), r.memo]) {
     if (t) bits.push(esc(t));
   }
 
-  let h = `<button type="button" class="tx${r.counted ? '' : ' off'}${
+  let h = `<button type="button" class="tx${income || r.counted ? '' : ' off'}${
       r.counted && !r.inStats ? ' nostat' : ''}"
     data-tx="${r.id}" data-hold="${r.id}" aria-expanded="${open}">
     <span class="grow">
       <span class="tx-name">${esc(r.merchantRaw || '(가맹점 미상)')}</span>
       <span class="muted">${bits.join(' · ')}</span></span>
-    <span class="tx-amt">${won(part == null ? r.net : part)}${
+    <span class="tx-amt"${income ? ' style="color:var(--up)"' : ''}>${
+      income ? '+ ' : ''}${won(part == null ? r.net : part)}${
       part != null && part !== r.net
         ? `<br><span class="muted num" style="font-weight:400">총 ${won(r.net)}</span>` : ''}</span></button>`;
   return open ? h + txEdit(r) : h;
@@ -2044,9 +2064,27 @@ function renderSetup() {
   const mine = D.merchants.filter((m) => m.defaultCategoryId && !m.isPassthrough && !m.alwaysAsk).length
              + D.rules.filter((r) => r.source === 'learned').length;
 
+  // 3교대는 수당이 달마다 달라 월급이 고정이 아니다. 등록값 하나로 버티면
+  // 그 숫자가 틀린 만큼 "몇 달이면 정리된다"도 틀린다.
+  const sal = salaryHistory({ transactions: D.txns, categories: D.categories, settings: s }, 6);
+  const salNote = sal.items.length
+    ? `<div class="muted" style="margin-top:7px">실제 급여 ${
+        sal.items.slice(0, 4).map((x) => `${Number(x.month.split('-')[1])}월
+          <b class="num">${won(x.amount)}</b>`).join(' · ')}
+        ${sal.items.length > 1 ? `<br>가장 적은 달 <b class="num">${won(sal.low)}</b> ·
+          평균 <b class="num">${won(sal.avg)}</b>` : ''}</div>
+       ${sal.items.length > 1 && sal.low !== Number(s.monthlyIncome || 0)
+         ? `<button type="button" class="act ghost small" style="margin-top:8px"
+              data-setincome="${sal.low}">가장 적은 달 금액으로 등록</button>
+            <div class="muted" style="margin-top:6px">많이 받은 달로 잡으면 상환 계획이
+              매달 밀립니다. 적은 달로 잡고 남는 달에 더 갚는 편이 안전합니다.</div>` : ''}`
+    : `<div class="muted" style="margin-top:7px">급여 입금이 등록되면 실제 금액을 보여 줍니다.
+        급여가 들어온 달은 이 값이 아니라 실제 입금액으로 계산합니다.</div>`;
+
   const income = `<form data-form="settings">
     <div class="field"><label>월 수입</label>
-      <input name="monthlyIncome" inputmode="numeric" value="${won(s.monthlyIncome)}"></div>
+      <input name="monthlyIncome" inputmode="numeric" value="${won(s.monthlyIncome)}">
+      ${salNote}</div>
     <div class="field"><label>생활비 예산</label>
       <input name="variableBudget" inputmode="numeric" value="${won(s.variableBudget)}">
       <div class="muted" style="margin-top:6px">고정지출을 제외한 변동 지출 예산입니다.</div></div>
@@ -3526,6 +3564,17 @@ document.addEventListener('click', guard(async (e) => {
     await updateDoc(doc(col('txns'), splitOff.dataset.splitoff), { splits: [] });
     await refresh();
     return toast('나누기를 해제했습니다');
+  }
+
+  // 최근 실제 급여 중 가장 적은 달로 월 수입을 맞춘다
+  const setIncome = e.target.closest('[data-setincome]');
+  if (setIncome) {
+    const amount = Number(setIncome.dataset.setincome) || 0;
+    await setDoc(doc(db, 'users', uid, 'meta', 'settings'),
+      { monthlyIncome: amount }, { merge: true });
+    await refresh();
+    renderSetup();
+    return toast(`월 수입을 ${won(amount)}으로 등록했습니다`);
   }
 
   if (e.target.id === 'autoClassify') {

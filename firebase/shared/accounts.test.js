@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { debtOf, cashOf, billingWindow, cardBills, rollup, rateOf, cardGroup, matchCard,
-         matchAccount, inCards }
+         matchAccount, inCards, billedIn }
   from './accounts.js';
 
 const NOW = new Date(2026, 8, 19, 12, 0);   // 2026-09-19
@@ -250,4 +250,64 @@ test('한두 글자로는 계좌를 고르지 않는다', () => {
 test('그만둔 계좌는 고르지 않는다', () => {
   const accounts = [{ id: 'a1', type: 'savings', name: '옛적금', active: false }];
   assert.equal(matchAccount('옛적금', accounts), null);
+});
+
+// ── 할부 ─────────────────────────────────────────────────
+// 승인 금액 전액을 그 달 청구서에 넣으면 이번 달 카드값이 부풀고
+// 다음 달은 비어 보인다. 리볼빙을 정리하는 중에는 그 차이가 그대로 계획을 흔든다.
+
+const PLAN_CARD = { id: 'c1', type: 'card', cardType: 'credit', name: '현대 미래에셋',
+                    issuer: '현대카드', billingDay: 10, active: true };
+const swipe = (id, amount, at, months = 0) =>
+  ({ id, type: 'expense', amount, occurredAt: at, accountId: 'c1',
+     installmentMonths: months, status: 'confirmed' });
+
+test('할부는 회차만 청구서에 들어간다', () => {
+  // 9/15 에 3개월 할부로 30만원. 10/10 · 11/10 · 12/10 에 10만원씩.
+  const t = swipe('t1', 300_000, '2026-09-15T12:00:00', 3);
+  const oct = billingWindow(10, new Date('2026-10-05T12:00:00'));   // 9월분
+  const nov = billingWindow(10, new Date('2026-11-05T12:00:00'));   // 10월분
+  const dec = billingWindow(10, new Date('2026-12-05T12:00:00'));   // 11월분
+  const jan = billingWindow(10, new Date('2027-01-05T12:00:00'));   // 12월분
+
+  assert.equal(billedIn(t, oct), 100_000, '1회차');
+  assert.equal(billedIn(t, nov), 100_000, '2회차');
+  assert.equal(billedIn(t, dec), 100_000, '3회차');
+  assert.equal(billedIn(t, jan), 0, '끝난 뒤에는 안 들어간다');
+  assert.equal(billedIn(t, oct) + billedIn(t, nov) + billedIn(t, dec), 300_000,
+    '회차를 다 더하면 원금이다');
+});
+
+test('나누어떨어지지 않으면 나머지를 1회차에 얹는다', () => {
+  const t = swipe('t1', 100_000, '2026-09-15T12:00:00', 3);
+  const win = (m, y = 2026) => billingWindow(10, new Date(`${y}-${m}-05T12:00:00`));
+  const parts = [billedIn(t, win('10')), billedIn(t, win('11')), billedIn(t, win('12'))];
+  assert.deepEqual(parts, [33_334, 33_333, 33_333]);
+  assert.equal(parts.reduce((a, b) => a + b, 0), 100_000, '1원도 안 흘린다');
+});
+
+test('일시불은 긁은 달 청구서에만 들어간다', () => {
+  const t = swipe('t1', 50_000, '2026-09-15T12:00:00');
+  assert.equal(billedIn(t, billingWindow(10, new Date('2026-10-05T12:00:00'))), 50_000);
+  assert.equal(billedIn(t, billingWindow(10, new Date('2026-11-05T12:00:00'))), 0);
+});
+
+test('카드값에 지난 달 할부 회차가 함께 잡힌다', () => {
+  const txns = [
+    swipe('plan', 300_000, '2026-09-15T12:00:00', 3),   // 2회차가 이 청구서에
+    swipe('now', 20_000, '2026-10-02T12:00:00'),        // 10월 일시불
+  ];
+  const [bill] = cardBills([PLAN_CARD], txns, new Date('2026-11-05T12:00:00'));
+  assert.equal(bill.month, '2026-10');
+  assert.equal(bill.usage, 120_000, '10만(2회차) + 2만');
+  assert.equal(bill.plans.length, 1);
+  assert.deepEqual([bill.plans[0].round, bill.plans[0].months, bill.plans[0].part],
+    [2, 3, 100_000], '몇 회차인지 적는다');
+  assert.equal(bill.installmentTotal, 100_000);
+});
+
+test('할부를 전액으로 세지 않는다', () => {
+  const txns = [swipe('plan', 300_000, '2026-09-15T12:00:00', 3)];
+  const [bill] = cardBills([PLAN_CARD], txns, new Date('2026-10-05T12:00:00'));
+  assert.equal(bill.usage, 100_000, '승인은 30만이지만 이 달 청구는 10만이다');
 });

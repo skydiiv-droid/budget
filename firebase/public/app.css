@@ -266,3 +266,8 @@ th{font-weight:600;color:var(--ink2);white-space:nowrap}
 /* 금액 나누기 — 한 결제를 카테고리 여러 칸으로 */
 [data-splitrow] input{margin:0}
 [data-splitrow] select{margin:0;min-width:0}
+
+/* 새 버전 띠. 끊김 알림과 자리는 같지만 경고가 아니라 누를 것이라 파랗게 둔다 */
+.newbar{background:var(--blue-dim);color:var(--blue);border-top:1px solid var(--blue-line);
+  width:100%;font-family:inherit;font-weight:600;cursor:pointer;
+  border-left:0;border-right:0;border-bottom:0}

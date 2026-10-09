@@ -196,6 +196,7 @@ async function start() {
   auth = getAuth(app);
   db = openDb(app);
   watchNetwork();
+  watchVersion();
 
 /**
  * 읽은 것을 기기에 남겨 둔다.
@@ -234,6 +235,28 @@ function watchNetwork() {
   addEventListener('online', paint);
   addEventListener('offline', paint);
   paint();
+}
+
+/**
+ * 새로 배포된 것이 있으면 말해 준다.
+ *
+ * 서비스워커는 담아 둔 화면을 먼저 주고 뒤에서 새것을 받아 둔다. 그래서
+ * **배포 직후 처음 열면 한 판 묵은 화면**이 뜬다. 다음에 열면 새것이지만,
+ * 그 사이에는 고친 것이 안 고쳐진 것으로 보이고 사람은 앱이 아니라 배포를
+ * 의심하게 된다. 받아 둔 것이 다르면 그렇다고 적고, 새로 고칠지는 본인이 정한다.
+ */
+function watchVersion() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type !== 'fresh' || $('newbar')) return;
+    const bar = document.createElement('button');
+    bar.id = 'newbar';
+    bar.type = 'button';
+    bar.className = 'offbar newbar';
+    bar.textContent = '새 버전이 준비되었습니다 — 눌러서 새로 고치기';
+    bar.addEventListener('click', () => location.reload());
+    document.body.appendChild(bar);
+  });
 }
 
   onAuthStateChanged(auth, async (user) => {
@@ -884,11 +907,19 @@ function renderBills(cards) {
       <span class="grow" style="font-size:12.5px;color:var(--ink2)${strong ? ';font-weight:700' : ''}">${label}</span>
       <span class="num" style="font-size:13px;font-weight:${strong ? 700 : 600}">${won(value)}</span></div>`;
 
+    // 할부가 섞여 있으면 긁은 금액과 청구액이 다르다. 왜 다른지 적어 준다 —
+    // 안 적으면 카드값이 틀린 것처럼 보인다.
+    const plans = b.plans?.length ? `<div class="note ok" style="margin:8px 0 2px">
+      할부 ${b.plans.length}건 <b class="num">${won(b.installmentTotal)}</b>이 들어 있습니다.
+      ${b.plans.slice(0, 3).map((p) => `${esc(p.name || '가맹점 미상')}
+        ${p.round}/${p.months}회 <b class="num">${won(p.part)}</b>`).join(' · ')}${
+        b.plans.length > 3 ? ' 등' : ''}</div>` : '';
+
     if (!b.revolving) {
-      h += line(b.open ? '이번 달 사용액' : '해당 월 사용액', b.usage, true);
+      h += line(b.open ? '이번 달 청구액' : '해당 월 청구액', b.usage, true) + plans;
       continue;
     }
-    h += line(b.open ? '이번 달 사용액' : '해당 월 사용액', b.usage);
+    h += line(b.open ? '이번 달 청구액' : '해당 월 청구액', b.usage) + plans;
     if (b.carried) h += line('전월 이월잔액', b.carried);
     h += line('청구 대상', b.billed);
     // "(70%)" 만 적으면 왜 다 안 내는지 알 수가 없다. 리볼빙 때문이라고 말한다.
@@ -1314,7 +1345,9 @@ function txRow(r, opts = {}) {
     : (r.counted ? '' : '예산 제외');
   // 해외 결제는 외화 원금을 같이 적는다. 원화만 보면 왜 그 금액인지 모른다.
   const fx = r.fxCurrency && r.fxAmount ? `${r.fxCurrency} ${r.fxAmount}` : '';
-  for (const t of [r.cardName, fx, label,
+  // 할부는 카드값이 달마다 나뉘어 빠진다. 일시불과 같아 보이면 안 된다.
+  const plan = Number(r.installmentMonths) >= 2 ? `${r.installmentMonths}개월 할부` : '';
+  for (const t of [r.cardName, fx, plan, label,
                    r.counted && !r.inStats ? '분석 제외' : '',
                    ...(r.tags || []).map((t) => `#${t}`), r.memo]) {
     if (t) bits.push(esc(t));
@@ -1409,6 +1442,18 @@ function txEdit(r) {
           <input name="amount" inputmode="numeric" value="${won(r.amount)}"></div>
         <div class="field"><label>가맹점</label>
           <input name="merchantRaw" value="${esc(r.merchantRaw || '')}"></div></div>
+      ${/* 날짜와 결제 수단을 고칠 길이 없었다. 문자를 엉뚱한 카드로 읽으면
+            누적 대조가 영영 안 맞고, 날짜가 틀리면 그 달 지출이 틀린다.
+            고치는 길이 없는 건 안 고쳐지는 것보다 나쁘다. */''}
+      <div class="fields">
+        <div class="field"><label>날짜 · 시각</label>
+          <input name="occurredAt" type="datetime-local"
+            value="${esc(String(r.occurredAt || '').slice(0, 16))}"></div>
+        <div class="field"><label>결제 수단</label>
+          <select name="accountId"><option value="">지정 안 함</option>${
+            D.accounts.filter((a) => a.active !== false).map((a) =>
+              `<option value="${a.id}"${a.id === r.accountId ? ' selected' : ''}>${esc(a.name)}</option>`).join('')
+          }</select></div></div>
       <div class="field"><label>태그 <span class="muted" style="font-weight:400">선택</span></label>
         <input name="tags" value="${esc((r.tags || []).join(', '))}"
           placeholder="제주여행, 모임" list="tagList">
@@ -1769,6 +1814,19 @@ function renderCheck() {
  */
 function gapFill(c) {
   if (!c.missing) return '';
+
+  // 원화 금액이 비어 있는 해외 결제가 그 카드에 있으면, 지금 비는 금액이 바로
+  // 그 건이다. 여기서 또 넣으면 같은 결제가 둘이 되고 해외 건은 영영 0원으로
+  // 남는다. 위에서 먼저 등록하게 보낸다.
+  const fx = D.txns.filter((t) => t.fxPending && t.status !== 'voided'
+    && c.accountIds?.includes(t.accountId));
+  if (fx.length) {
+    return `<div class="note ok" style="margin:11px 0 0">
+      이 카드에 원화 금액이 비어 있는 <b>해외 결제 ${fx.length}건</b>이 있습니다.
+      위의 <b>해외 결제 원화 금액 확인</b>에서 먼저 등록하세요.
+      여기서 또 등록하면 같은 결제가 두 건이 됩니다.</div>`;
+  }
+
   const day = String(c.since?.at || c.at).slice(0, 10);
 
   return `<div class="hr"></div>
@@ -3838,7 +3896,10 @@ document.addEventListener('submit', guard(async (e) => {
     const amount = parseAmount(values.amount);
     if (!amount) return toast('금액을 입력하세요');
     dropOlder();                     // 창 밖의 옛 거래를 고쳤을 수도 있다
-    await updateDoc(doc(col('txns'), form.dataset.txn), {
+    const was = D.txns.find((t) => t.id === form.dataset.txn);
+    // 결제 수단을 고치면 카드 이름도 맞춰 준다 — 누적 대조는 둘 다 본다.
+    const account = D.accounts.find((a) => a.id === values.accountId);
+    const patch = {
       amount,
       // 금액을 손으로 넣었으면 원화가 확정된 것이다. 계속 물을 이유가 없다.
       fxPending: false,
@@ -3846,7 +3907,15 @@ document.addEventListener('submit', guard(async (e) => {
       tags: parseTags(values.tags),
       memo: String(values.memo || '').trim().slice(0, 60),
       excludeFromBudget: values.excludeFromBudget === true,
-    });
+      accountId: values.accountId || '',
+      cardName: account && account.type === 'card' ? account.name : (account ? '' : (was?.cardName || '')),
+    };
+    // 비워 두거나 못 읽을 값이 오면 원래 시각을 그대로 둔다. 날짜 없는 거래는
+    // 어느 달에도 안 잡혀 화면에서 사라진다.
+    const when = String(values.occurredAt || '').slice(0, 16);
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(when)) patch.occurredAt = `${when}:00`;
+
+    await updateDoc(doc(col('txns'), form.dataset.txn), patch);
     await refresh();
     return toast('수정했습니다');
   }

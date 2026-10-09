@@ -65,6 +65,27 @@ function cacheable(url) {
     || url.pathname === '/data';
 }
 
+/** 화면을 그리는 파일인가. 아이콘이 바뀐 것으로 새로 고치라고 하면 안 된다. */
+const shell = (url) => mine(url)
+  && (url.pathname === '/' || /\.(html|css|js)$/.test(url.pathname));
+
+/** 담아 둔 것과 받은 것이 다른가. 본문을 비교하지 않고 꼬리표만 본다. */
+function changed(hit, res) {
+  const tag = (r) => r.headers.get('etag') || r.headers.get('last-modified') || '';
+  const a = tag(hit);
+  const b = tag(res);
+  return Boolean(a && b && a !== b);
+}
+
+/** 열려 있는 화면에 알린다. 새로 고칠지는 보는 쪽이 정한다. */
+let told = false;
+async function tell() {
+  if (told) return;
+  told = true;
+  const clients = await self.clients.matchAll({ type: 'window' });
+  for (const c of clients) c.postMessage({ type: 'fresh' });
+}
+
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || !cacheable(url)) return;
@@ -78,7 +99,13 @@ self.addEventListener('fetch', (e) => {
       .then((res) => {
         // 남의 집 응답(type: 'cors')도 담는다. 불투명한 것(opaque)만 거른다 —
         // 그건 성공인지 아닌지조차 알 수 없어서 담으면 두고두고 말썽이다.
-        if (res && res.ok && res.type !== 'opaque') cache.put(e.request, res.clone());
+        if (res && res.ok && res.type !== 'opaque') {
+          // 담아 둔 것과 다른 것이 왔다 = 새로 배포됐다. 지금 화면은 한 판 묵은
+          // 것이므로 **그렇다고 말해 준다.** 안 말하면 고친 것이 안 고쳐진 것으로
+          // 보이고, 사람은 앱이 아니라 배포를 의심하게 된다.
+          if (hit && changed(hit, res) && shell(url)) tell();
+          cache.put(e.request, res.clone());
+        }
         return res;
       })
       .catch(() => null);

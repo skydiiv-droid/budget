@@ -91,6 +91,44 @@ export function billingWindow(billingDay, now = new Date(), holidays = []) {
 }
 
 /**
+ * 그 청구 기간에 이 거래가 얼마로 들어가는가.
+ *
+ * **할부는 승인 금액 전액이 그 달 청구서에 들어가지 않는다.** 3개월 할부
+ * 30만원은 달마다 10만원씩 세 번 빠진다. 전액으로 세면 이번 달 카드값이
+ * 20만원 부풀고, 다음 달 카드값에서는 통째로 빠져 10만원이 비어 보인다.
+ * 리볼빙을 정리하는 중에 카드값이 그만큼 틀리면 계획이 어긋난다.
+ *
+ * 카드사 누적과 지출 통계에서는 **승인 금액 전액**을 그대로 쓴다. 누적에는
+ * 일시불이든 할부든 승인액이 들어가고, 쓴 날은 긁은 날이기 때문이다.
+ * 나누는 것은 청구서뿐이다.
+ *
+ * 나머지 원은 1회차에 얹는다 — 카드사가 그렇게 한다.
+ */
+export function billedIn(txn, win) {
+  const amount = num(txn?.amount);
+  const months = Math.max(0, Math.round(num(txn?.installmentMonths)));
+  const at = String(txn?.occurredAt || '');
+  if (!amount || !at) return 0;
+
+  const inWin = (iso) => {
+    const t = new Date(iso).getTime();
+    return t >= win.from.getTime() && t <= win.to.getTime();
+  };
+
+  if (months < 2) return inWin(at) ? amount : 0;
+
+  // 몇 회차인가. 청구 기간은 달력 월이라 달 수만 세면 된다.
+  const [wy, wm] = String(win.month).split('-').map(Number);
+  const [ty, tm] = [Number(at.slice(0, 4)), Number(at.slice(5, 7))];
+  if (!wy || !ty) return 0;
+  const round = (wy - ty) * 12 + (wm - tm);
+  if (round < 0 || round >= months) return 0;
+
+  const each = Math.floor(amount / months);
+  return round === 0 ? amount - each * (months - 1) : each;
+}
+
+/**
  * 같은 청구서를 쓰는 카드끼리 묶는다.
  *
  * 현대카드는 카드가 둘이어도 누적을 **합쳐서** 찍는다. 미래에셋에서 10만,
@@ -194,14 +232,26 @@ export function cardBills(accounts = [], transactions = [], now = new Date(), ho
     const lead = group.find((c) => c.billingDay) || card;
     const w = billingWindow(lead.billingDay, now, holidays);
 
-    const usage = transactions
+    // 할부는 회차만 들어간다. 지난 달에 긁은 3개월 할부도 이 청구서에 2회차로 온다.
+    const charged = transactions
       .filter((t) => t.status !== 'voided' && t.type === 'expense')
       .filter((t) => inCards(t, group))
-      .filter((t) => {
-        const at = new Date(t.occurredAt);
-        return at >= w.from && at <= w.to;
+      .map((t) => ({ t, part: billedIn(t, w) }))
+      .filter((x) => x.part > 0);
+
+    const usage = charged.reduce((sum, x) => sum + x.part, 0);
+    // 이 청구서에 들어간 할부. 왜 긁은 금액과 다른지 말해 줄 수 있어야 한다.
+    const plans = charged
+      .filter((x) => Math.round(num(x.t.installmentMonths)) >= 2)
+      .map((x) => {
+        const months = Math.round(num(x.t.installmentMonths));
+        const [wy, wm] = String(w.month).split('-').map(Number);
+        const at = String(x.t.occurredAt);
+        const round = (wy - Number(at.slice(0, 4))) * 12 + (wm - Number(at.slice(5, 7))) + 1;
+        return { id: x.t.id, name: x.t.merchantRaw || '', amount: num(x.t.amount),
+                 part: x.part, months, round };
       })
-      .reduce((sum, t) => sum + num(t.amount), 0);
+      .sort((a, b) => b.part - a.part);
 
     const carried = group.reduce((s, c) => s + revolvingOf(c), 0);
     const billed = usage + carried;
@@ -225,6 +275,8 @@ export function cardBills(accounts = [], transactions = [], now = new Date(), ho
       from: w.from, to: w.to, due: w.due, payAt: w.payAt, month: w.month, open: w.open,
       shifted: w.payAt.getDate() !== w.due.getDate(),
       usage, carried, billed,
+      // 할부 회차. 비어 있으면 할부가 없다는 뜻이다.
+      plans, installmentTotal: plans.reduce((s2, p) => s2 + p.part, 0),
       revolving: ratio < 100,
       ratio,
       total: payNow,

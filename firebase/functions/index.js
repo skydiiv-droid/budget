@@ -382,7 +382,10 @@ export const summary = onRequest(
                            payAt: bill.payAt.toISOString().slice(0, 10),
                            daysLeft: bill.daysLeft } : null,
         billTotal: L.cards.total,
-        waiting: L.inbox.pending + asArray(rawSnap).filter((r) => !r.txnId).length,
+        // 해외 결제의 원화 금액이 비어 있는 것도 확인할 것이다. 안 세면
+        // 위젯은 "확인할 것 없음"인데 지출 합계가 그만큼 비어 있다.
+        waiting: L.inbox.pending + asArray(rawSnap).filter((r) => !r.txnId).length
+          + transactions.filter((t) => t.fxPending && t.status !== 'voided').length,
       });
     } catch (err) {
       const status = err.status || 500;

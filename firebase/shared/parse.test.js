@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseMessage, extractAmounts, extractMerchant, normalizeMerchant, detectCardName,
+  extractForeign,
 } from './parse.js';
 
 const AT = new Date(2026, 8, 19, 19, 14);
@@ -307,4 +308,62 @@ test('카드대금이 통장에서 빠지는 문자는 은행 것이다', () => 
     new Date('2026-10-12T09:00:00'));
   assert.equal(r.issuer, '우리은행');
   assert.equal(r.balance, 500_000);
+});
+
+// ── 해외 결제 ────────────────────────────────────────────
+// 외화 숫자를 원화로 세면 조용히 틀린다. 1,200엔이 1,200원으로 들어가면
+// 카드사 누적과만 안 맞고, 왜 안 맞는지는 아무 데도 안 적힌다.
+
+test('외화 금액을 원화로 세지 않는다', () => {
+  const r = parseMessage('[Web발신]\n현대카드 승인\nJPY 1,200\n10/09 13:00\nDONKI\n해외이용',
+    '15881234', new Date('2026-10-09T12:00:00'));
+  assert.equal(r.ok, true, '미인식으로 떨어뜨리면 가맹점도 외화도 다 잃는다');
+  assert.equal(r.amount, null, '원화 금액은 모른다 — 환율로 짐작하지 않는다');
+  assert.equal(r.foreignCurrency, 'JPY');
+  assert.equal(r.foreignAmount, 1200);
+  assert.equal(r.note, '원화 금액 확인 필요');
+  assert.equal(r.merchantRaw, 'DONKI');
+});
+
+test('원화가 함께 찍혀 있으면 그걸 쓴다', () => {
+  const r = parseMessage(
+    '[Web발신]\n현대카드승인 신*우\n13,500원 일시불\n10/09 02:11\nAPPLE.COM/BILL(USD 9.99)\n누적1,234,567원',
+    '15881234', new Date('2026-10-09T12:00:00'));
+  assert.equal(r.amount, 13_500);
+  assert.equal(r.foreignCurrency, 'USD');
+  assert.equal(r.foreignAmount, 9.99);
+  assert.equal(r.cumulative, 1_234_567);
+  assert.equal(r.merchantRaw, 'APPLE.COM/BILL', '통화 코드가 가맹점으로 잡히면 안 된다');
+});
+
+test('시각 조각을 외화 금액으로 읽지 않는다', () => {
+  // "02:11 USD 12.00" 에서 11 을 집으면 금액이 11달러가 된다
+  const f = extractForeign('[KB국민카드] 10/09 02:11 USD 12.00 (16,580원) 해외승인 STEAM');
+  assert.equal(f.currency, 'USD');
+  assert.equal(f.amount, 12);
+});
+
+test('소수점과 통화 기호를 읽는다', () => {
+  assert.deepEqual(
+    [extractForeign('승인 $4.99 OPENAI').currency, extractForeign('승인 $4.99 OPENAI').amount],
+    ['USD', 4.99]);
+  assert.equal(extractForeign('승인 EUR 45.50 SNCF').amount, 45.5);
+  assert.equal(extractForeign('승인 1,200엔 DONKI').currency, 'JPY');
+});
+
+test('한글 통화 별칭은 뒤에 한글이 더 붙으면 통화가 아니다', () => {
+  // "엔터프라이즈렌트카" 를 1,200엔으로 읽으면 안 된다
+  const r = parseMessage('[Web발신]\n현대카드 승인\n12,000원\n10/09 13:00\n엔터프라이즈렌트카',
+    '15881234', new Date('2026-10-09T12:00:00'));
+  assert.equal(r.amount, 12_000);
+  assert.equal(r.foreignCurrency, '');
+  assert.equal(r.foreignAmount, null);
+});
+
+test('국내 결제에는 외화가 안 붙는다', () => {
+  const r = parseMessage('[Web발신]\n현대카드(1234)승인\n신*우\n1,800원 일시불\n09/19 19:14\n컴포즈커피발산\n누적3,634,067원',
+    '15881234', new Date('2026-09-19T19:14:00'));
+  assert.equal(r.amount, 1_800);
+  assert.equal(r.foreignAmount, null);
+  assert.equal(r.merchantRaw, '컴포즈커피발산');
 });

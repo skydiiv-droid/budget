@@ -17,7 +17,7 @@ const cell = (v) => {
 
 export const HEADERS = [
   '날짜', '시각', '종류', '금액', '가게', '카테고리', '큰 갈래',
-  '카드·계좌', '태그', '메모', '예산제외', '상태', '분할',
+  '카드·계좌', '태그', '메모', '예산제외', '상태', '분할', '외화',
 ];
 
 const KIND = { expense: '지출', income: '수입', transfer: '옮김', cancel: '취소' };
@@ -49,6 +49,8 @@ export function toCSV(transactions = [], { categories = [], accounts = [] } = {}
           t.excludeFromBudget ? 'Y' : '',
           t.status || '',
           hasSplit(t) ? `${i + 1}/${parts.length}` : '',
+          // 해외 결제는 원금을 남긴다. 원화만 남기면 왜 그 금액인지 알 수 없다.
+          t.fxCurrency && t.fxAmount ? `${t.fxCurrency} ${t.fxAmount}` : '',
         ].map(cell).join(',');
       });
     });

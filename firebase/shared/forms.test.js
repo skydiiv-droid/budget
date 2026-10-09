@@ -17,7 +17,7 @@ const sources = ['app.js', 'index.html'].map((f) => readFileSync(join(PUBLIC, f)
 /** `<form data-form="x">` 부터 `</form>` 까지를 한 덩어리로 본다. */
 function forms(text) {
   const out = [];
-  const re = /<form[^>]*data-(?:form|txn|raw|gapfill)="([^"]+)"[\s\S]*?<\/form>/g;
+  const re = /<form[^>]*data-(?:form|txn|raw|gapfill|fx)="([^"]+)"[\s\S]*?<\/form>/g;
   let m;
   while ((m = re.exec(text))) out.push([m[1], m[0]]);
   return out;

@@ -187,8 +187,16 @@ function buildTransaction(parsed, rawId, location, decision, id, card, accounts 
   const txn = {
     id,
     type: 'expense',
-    amount: parsed.amount,
+    // 해외 결제는 원화 금액이 안 찍혀 오는 곳이 있다. 0 으로 두면 총액에
+    // 안 섞이고, 확인 탭이 "원화 금액 확인 필요"로 묻는다.
+    amount: parsed.amount == null ? 0 : parsed.amount,
     currency: 'KRW',
+    // 외화 원금. 환율로 원화를 짐작하지 않는다 — 카드사가 매기는 환율과
+    // 수수료를 우리가 알 수 없고, 짐작한 숫자가 총액에 섞이면 어디가 틀렸는지
+    // 설명할 수 없게 된다.
+    fxCurrency: parsed.foreignCurrency || '',
+    fxAmount: parsed.foreignAmount == null ? 0 : parsed.foreignAmount,
+    fxPending: Boolean(parsed.foreignAmount != null && parsed.amount == null),
     occurredAt: parsed.occurredAt.toISOString(),
     issuer: parsed.issuer,
     cardName: parsed.cardName,

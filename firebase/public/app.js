@@ -1310,8 +1310,11 @@ function txRow(r, opts = {}) {
   const label = r.moved ? '옮긴 돈 — 지출 아님'
     : income ? '수입'
     : r.type === 'cancel' ? '취소'
+    : r.fxPending ? '원화 금액 확인 필요'
     : (r.counted ? '' : '예산 제외');
-  for (const t of [r.cardName, label,
+  // 해외 결제는 외화 원금을 같이 적는다. 원화만 보면 왜 그 금액인지 모른다.
+  const fx = r.fxCurrency && r.fxAmount ? `${r.fxCurrency} ${r.fxAmount}` : '';
+  for (const t of [r.cardName, fx, label,
                    r.counted && !r.inStats ? '분석 제외' : '',
                    ...(r.tags || []).map((t) => `#${t}`), r.memo]) {
     if (t) bits.push(esc(t));
@@ -1324,7 +1327,7 @@ function txRow(r, opts = {}) {
       <span class="tx-name">${esc(r.merchantRaw || '(가맹점 미상)')}</span>
       <span class="muted">${bits.join(' · ')}</span></span>
     <span class="tx-amt"${income ? ' style="color:var(--up)"' : ''}>${
-      income ? '+ ' : ''}${won(part == null ? r.net : part)}${
+      r.fxPending && !r.net ? '미정' : `${income ? '+ ' : ''}${won(part == null ? r.net : part)}`}${
       part != null && part !== r.net
         ? `<br><span class="muted num" style="font-weight:400">총 ${won(r.net)}</span>` : ''}</span></button>`;
   return open ? h + txEdit(r) : h;
@@ -1483,7 +1486,7 @@ function renderInbox() {
   const unparsed = D.raw.filter((r) => !r.parsedOk && !r.txnId);
   const cancels = openCancels(D.txns);
   const found = detectRecurring({ transactions: D.txns, recurring: D.recurring, settings: D.settings });
-  let h = renderPaste() + renderCheck();
+  let h = renderPaste() + renderFx() + renderCheck();
 
   if (found.length) {
     h += `<div class="lbl" style="margin:2px 0 4px">고정지출로 보이는 항목 · ${found.length}건</div>
@@ -1649,6 +1652,57 @@ function renderPaste() {
  * 놓친 걸 놓친 줄 모르는 게 제일 나쁘다. 합계가 조용히 틀려 있으니까.
  * 카드 문자의 누적과 은행 문자의 잔액은 카드사·은행이 센 숫자라 진실이다.
  */
+/**
+ * 해외 결제의 원화 금액을 묻는다.
+ *
+ * 카드 문자에 "USD 9.99" 만 찍혀 오는 곳이 있다. 환율로 짐작하면 카드사가
+ * 매기는 환율·수수료와 어긋나고, 짐작한 숫자가 총액에 섞이면 어디가 틀렸는지
+ * 설명할 수 없게 된다. 그래서 **0원으로 두고 묻는다** — 총액에 안 섞이고,
+ * 카드사 누적 대조가 그만큼을 빈 금액으로 잡아 준다.
+ *
+ * 그 차이가 곧 이 결제의 원화 금액이다. 한 건만 비어 있으면 그대로 권한다.
+ */
+function renderFx() {
+  const list = D.txns.filter((t) => t.fxPending && t.status !== 'voided')
+    .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));
+  if (!list.length) return '';
+
+  const cards = cardCheck({ anchors: D.anchors, transactions: D.txns, accounts: D.accounts });
+  /** 그 카드에 비어 있는 금액. 기다리는 해외 결제가 하나일 때만 권한다. */
+  const hint = (t) => {
+    const card = cards.find((c) => c.accountIds?.includes(t.accountId) && c.missing > 0);
+    if (!card) return 0;
+    const waiting = list.filter((x) => card.accountIds.includes(x.accountId)).length;
+    return waiting === 1 ? card.missing : 0;
+  };
+
+  let h = `<div class="lbl" style="margin:2px 0 4px">해외 결제 원화 금액 확인 · ${list.length}건</div>
+    <div class="muted" style="margin-bottom:9px">문자에 외화만 찍혀 왔습니다.
+      원화 금액을 등록하기 전까지 지출 합계에 들어가지 않습니다.</div>`;
+
+  for (const t of list) {
+    const guess = hint(t);
+    h += `<form class="card" data-fx="${t.id}">
+      <div class="row" style="align-items:flex-start">
+        <span class="grow"><span style="font-size:15px;font-weight:600">${esc(t.merchantRaw || '(가맹점 미상)')}</span><br>
+          <span class="muted">${esc(String(t.occurredAt).replace('T', ' ').slice(5, 16))}${
+            t.cardName ? ' · ' + esc(t.cardName) : ''}</span></span>
+        <span class="big num" style="font-size:20px">${esc(t.fxCurrency)} ${
+          esc(String(t.fxAmount))}</span></div>
+      ${guess ? `<div class="note ok" style="margin:12px 0 0">카드사 누적과
+        <b class="num">${won(guess)}</b> 차이가 납니다. 이 결제 금액일 수 있습니다.</div>` : ''}
+      <div class="field" style="margin:12px 0 0"><label>원화 금액</label>
+        <input name="amount" inputmode="numeric" placeholder="${guess ? won(guess) : '카드 명세서 기준'}"></div>
+      <div style="display:flex;gap:7px;margin-top:11px">
+        <button type="submit" class="act primary" style="flex:1">등록</button>
+        <button type="button" class="act ghost" data-fxdrop="${t.id}">해외 결제 아님</button></div>
+      <div class="muted" style="margin-top:8px">카드사 앱의 승인 내역에 원화 금액이 찍힙니다.
+        명세서가 확정되기 전에는 금액이 조금 달라질 수 있습니다.</div>
+    </form>`;
+  }
+  return h;
+}
+
 function renderCheck() {
   const cards = cardCheck({ anchors: D.anchors, transactions: D.txns, accounts: D.accounts })
     .filter((c) => !c.ok);
@@ -3577,6 +3631,16 @@ document.addEventListener('click', guard(async (e) => {
     return toast(`월 수입을 ${won(amount)}으로 등록했습니다`);
   }
 
+  // 외화로 잘못 읽은 건. 묻기를 그만두되 금액은 사람이 내역에서 고친다.
+  const fxDrop = e.target.closest('[data-fxdrop]');
+  if (fxDrop) {
+    dropOlder();
+    await updateDoc(doc(col('txns'), fxDrop.dataset.fxdrop),
+      { fxPending: false, fxCurrency: '', fxAmount: 0 });
+    await refresh();
+    return toast('해외 결제 표시를 지웠습니다 — 금액은 내역에서 수정하세요');
+  }
+
   if (e.target.id === 'autoClassify') {
     return classifyReady(D.txns.filter((t) => t.status === 'pendingCategory'
       && (t.type === 'expense' || t.type === 'income')));
@@ -3723,6 +3787,16 @@ document.addEventListener('submit', guard(async (e) => {
     return toast(`${{ expense: '지출', income: '수입', transfer: '이체' }[kind]} ${won(amount)} 등록했습니다`);
   }
 
+  // 해외 결제의 원화 금액을 등록한다
+  if (form.dataset.fx) {
+    const amount = parseAmount(values.amount);
+    if (!amount || amount <= 0) return toast('원화 금액을 입력하세요');
+    dropOlder();
+    await updateDoc(doc(col('txns'), form.dataset.fx), { amount, fxPending: false });
+    await refresh();
+    return toast(`원화 ${won(amount)}으로 등록했습니다`);
+  }
+
   // 카드사 누적과 안 맞는 금액을 직접 채운다. 한 번에 다 채우지 않아도 된다.
   if (form.dataset.gapfill) {
     const card = cardCheck({ anchors: D.anchors, transactions: D.txns, accounts: D.accounts })
@@ -3766,6 +3840,8 @@ document.addEventListener('submit', guard(async (e) => {
     dropOlder();                     // 창 밖의 옛 거래를 고쳤을 수도 있다
     await updateDoc(doc(col('txns'), form.dataset.txn), {
       amount,
+      // 금액을 손으로 넣었으면 원화가 확정된 것이다. 계속 물을 이유가 없다.
+      fxPending: false,
       merchantRaw: String(values.merchantRaw || '').trim(),
       tags: parseTags(values.tags),
       memo: String(values.memo || '').trim().slice(0, 60),

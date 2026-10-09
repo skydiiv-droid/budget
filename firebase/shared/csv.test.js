@@ -38,8 +38,15 @@ test('나눠 둔 결제는 조각마다 한 줄로 내보낸다', () => {
   assert.equal(lines.length, 3, '머리글 + 조각 둘');
   assert.ok(lines[1].includes('5000') && lines[1].includes('취미'));
   assert.ok(lines[2].includes('15000') && lines[2].includes('마트'));
-  assert.ok(lines[1].endsWith('1/2') && lines[2].endsWith('2/2'), '몇 번째 조각인지 적는다');
+  assert.ok(lines[1].includes(',1/2,') && lines[2].includes(',2/2,'), '몇 번째 조각인지 적는다');
   // 금액 합은 그대로다 — 표 계산기에서 더해도 2만원이다
   const sum = lines.slice(1).map((l) => Number(l.split(',')[3])).reduce((a, b) => a + b, 0);
   assert.equal(sum, 20_000);
+});
+
+test('해외 결제는 외화 원금도 남긴다', () => {
+  const csv = toCSV([{ id: 't1', type: 'expense', amount: 13_500,
+    occurredAt: '2026-10-09T02:11:00', merchantRaw: 'APPLE.COM/BILL',
+    fxCurrency: 'USD', fxAmount: 9.99 }]);
+  assert.ok(csv.includes('USD 9.99'), '원화만 남기면 왜 그 금액인지 알 수 없다');
 });

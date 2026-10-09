@@ -30,7 +30,76 @@ const MERCHANT_NOISE = [
   '승인', '취소', '결제', '일시불', '할부', '개월', '누적', '잔액', '출금', '입금',
   '지급', '이체', '송금', '납부', '자동이체', '사용금액', '사용', '체크', '신용',
   '고객님', '원', 'Web발신', '잔여', '한도', '적립',
+  // 해외 결제 문자에 붙는 말. 이것이 가맹점으로 잡히면 "해외이용"에서 긁은 것이 된다.
+  '해외', '해외이용', '해외승인', '해외결제', '국외', '환율', '수수료포함',
 ];
+
+/**
+ * 해외 결제.
+ *
+ * **외화 숫자를 원화로 세면 조용히 틀린다.** "JPY 1,200" 을 1,200원으로 읽으면
+ * 1만원 넘게 쓴 것이 천원으로 들어가고, 카드사 누적과만 안 맞아 "문자를 놓친
+ * 결제"로 뜬다. 틀린 줄 모르는 게 제일 나쁘다.
+ *
+ * 그래서 외화는 **원화가 아니라고 표시만** 한다. 원화 금액은 문자에 함께 찍혀
+ * 있으면 그것을 쓰고, 없으면 비워 두고 사람에게 묻는다 — 환율로 짐작하지 않는다.
+ * 카드사가 매기는 환율과 수수료는 우리가 알 수 없고, 짐작한 숫자가 총액에
+ * 섞이면 어디가 틀렸는지 설명할 수 없게 된다.
+ *
+ * 한글 별칭은 숫자 뒤에 붙는 것만 받는다 — "엔"을 그냥 받으면 "엔터프라이즈"에
+ * 걸린다. 뒤에 한글이 더 붙으면 통화가 아니다.
+ */
+const FX_CODES = [
+  ['USD', ['USD', 'US\\$', '\\$', '달러']],
+  ['JPY', ['JPY', '¥', '엔']],
+  ['EUR', ['EUR', '€', '유로']],
+  ['GBP', ['GBP', '£', '파운드']],
+  ['CNY', ['CNY', 'RMB', '위안']],
+  ['HKD', ['HKD']], ['TWD', ['TWD']], ['SGD', ['SGD']], ['AUD', ['AUD']],
+  ['CAD', ['CAD']], ['CHF', ['CHF']], ['NZD', ['NZD']], ['SEK', ['SEK']],
+  ['THB', ['THB', '바트']], ['VND', ['VND']], ['PHP', ['PHP']], ['MYR', ['MYR']],
+  ['IDR', ['IDR']], ['INR', ['INR']], ['AED', ['AED']], ['MXN', ['MXN']],
+  ['BRL', ['BRL']], ['TRY', ['TRY']], ['RUB', ['RUB']],
+];
+
+const NUM = '(\\d[\\d,]*(?:\\.\\d{1,4})?)';
+
+/**
+ * 외화 금액을 찾는다. 통화 코드가 앞에 있든 뒤에 있든 받는다.
+ * 찾으면 `{ currency, amount, start, end }`, 없으면 null.
+ */
+export function extractForeign(text) {
+  const body = String(text || '');
+  let best = null;
+
+  for (const [code, aliases] of FX_CODES) {
+    for (const alias of aliases) {
+      const after = /[가-힣]/.test(alias) ? '(?![가-힣])' : '';
+      const re = new RegExp(`(?:${alias}${after}\\s*${NUM}|${NUM}\\s*${alias}${after})`, 'gi');
+      let m;
+      while ((m = re.exec(body)) !== null) {
+        const raw = String(m[1] ?? m[2]);
+        const amount = Number(raw.replace(/,/g, ''));
+        if (!Number.isFinite(amount) || amount <= 0) continue;
+
+        // "02:11 USD 12.00" 의 11 은 금액이 아니라 시각이다. 숫자 앞에 숫자나
+        // 구분자가 붙어 있으면 다른 것에서 떨어져 나온 토막이다.
+        const numAt = body.indexOf(raw, m.index);
+        if (/[\d:/.]/.test(body.charAt(numAt - 1))) {
+          // 숫자만 버리고 통화 코드는 다시 본다. "02:11 USD 12.00" 에서
+          // 11 을 버린 자리에서 멈추면 뒤의 12.00 을 못 읽는다.
+          re.lastIndex = numAt + raw.length;
+          continue;
+        }
+
+        if (!best || m.index < best.start) {
+          best = { currency: code, amount, start: m.index, end: m.index + m[0].length };
+        }
+      }
+    }
+  }
+  return best;
+}
 
 /**
  * 어느 곳에서 온 문자인가.
@@ -81,6 +150,9 @@ export function parseMessage(body, sender, receivedAt, patterns = []) {
     cumulative: null,     // 카드 월 누적 앵커
     occurredAt: null,
     merchantRaw: null,
+    // 해외 결제. 원화 금액은 문자에 함께 찍혀 있을 때만 채워진다.
+    foreignCurrency: '',
+    foreignAmount: null,
     installmentMonths: 0,
     confidence: 0,
     layer: null,
@@ -103,7 +175,11 @@ export function parseMessage(body, sender, receivedAt, patterns = []) {
 
   if (!result.occurredAt) result.occurredAt = now;
 
-  result.ok = result.kind !== null && result.kind !== 'unknown' && result.amount !== null;
+  // 해외 결제는 원화 금액이 안 찍혀 오는 곳이 있다. 그래도 **거래로는 넣는다** —
+  // 미인식 문자로 떨어뜨리면 가맹점도 외화도 다 잃고 처음부터 적어야 한다.
+  result.ok = result.kind !== null && result.kind !== 'unknown'
+    && (result.amount !== null || result.foreignAmount !== null);
+  if (result.ok && result.amount === null) result.note = '원화 금액 확인 필요';
   if (!result.ok && !result.note) {
     result.note = result.amount === null ? '금액을 찾지 못함' : '거래 종류를 판정하지 못함';
   }
@@ -154,7 +230,17 @@ export function applyPatterns(text, issuer, patterns) {
 function applyGeneric(text, result, now) {
   result.kind = detectKind(text);
 
-  for (const a of extractAmounts(text)) {
+  // 해외 결제. 그 자리의 숫자는 원화가 아니므로 금액 후보에서 뺀다 —
+  // "JPY 1,200" 을 1,200원으로 세면 조용히 틀린다.
+  const fx = extractForeign(text);
+  if (fx) {
+    result.foreignCurrency = fx.currency;
+    result.foreignAmount = fx.amount;
+  }
+  const outside = (a) => !fx || a.index < fx.start || a.index >= fx.end;
+  const amounts = extractAmounts(text).filter(outside);
+
+  for (const a of amounts) {
     if (a.role === 'balance' && result.balance === null) result.balance = a.value;
     else if (a.role === 'cumulative' && result.cumulative === null) result.cumulative = a.value;
     else if (a.role === 'amount' && result.amount === null) result.amount = a.value;
@@ -162,7 +248,7 @@ function applyGeneric(text, result, now) {
 
   // 라벨이 없는 숫자만 있을 때: 잔액/누적으로 안 잡힌 첫 번째를 거래 금액으로 본다
   if (result.amount === null) {
-    const unlabeled = extractAmounts(text).find((a) => a.role === 'unknown');
+    const unlabeled = amounts.find((a) => a.role === 'unknown');
     if (unlabeled) result.amount = unlabeled.value;
   }
 
@@ -290,10 +376,14 @@ export function extractMerchant(text) {
     .filter((t) => {
       if (t.length < 2) return false;
       if (MERCHANT_NOISE.includes(t)) return false;
+      // 통화 코드는 가맹점이 아니다 — "APPLE.COM/BILL(USD 9.99)" 에서 USD 가 잡혔다.
+      if (FX_CODES.some(([code]) => code === t.toUpperCase())) return false;
       if (!/[가-힣A-Za-z]/.test(t)) return false;
       if (/^\d/.test(t)) return false;              // 1,800원 · 09/19
       if (/[*]/.test(t)) return false;              // 신*우 · *478794
-      if (/[:/]/.test(t)) return false;             // 19:14 · 09/19
+      // 19:14 · 09/19 는 걸러야 하지만 APPLE.COM/BILL 은 가맹점이다.
+      // 숫자로 시작하는 것은 위에서 이미 걸렀으므로 날짜 모양만 본다.
+      if (/\d{1,2}[:/]\d{1,2}/.test(t)) return false;
       if (/\d[\d,]*원/.test(t)) return false;       // 누적3,634,067원
       if (/\d{1,3}(?:,\d{3})+/.test(t)) return false;
       return true;

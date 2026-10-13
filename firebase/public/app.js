@@ -18,7 +18,8 @@ import {
 
 import { ledger, monthSpending, breakdown, shiftMonth, monthKey, sameSpanLastMonth, pace,
          windowStart, hasOlderThan, paceShift, salaryHistory, spendRow } from './shared/ledger.js';
-import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf, matchCard } from './shared/accounts.js';
+import { TYPE_LABEL, CARD_LABEL, debtOf, cashOf, matchCard, cardBillSuspects }
+  from './shared/accounts.js';
 import { findOriginal, openCancels, voidPatch, settledPatch,
          findPartial, partialPatch, partlyCancelled } from './shared/cancel.js';
 import { netAmount } from './shared/settlement.js';
@@ -1544,7 +1545,7 @@ function renderInbox() {
   const unparsed = D.raw.filter((r) => !r.parsedOk && !r.txnId);
   const cancels = openCancels(D.txns);
   const found = detectRecurring({ transactions: D.txns, recurring: D.recurring, settings: D.settings });
-  let h = renderPaste() + renderFx() + renderCheck();
+  let h = renderPaste() + renderMisbilled() + renderFx() + renderCheck();
 
   if (found.length) {
     h += `<div class="lbl" style="margin:2px 0 4px">고정지출로 보이는 항목 · ${found.length}건</div>
@@ -1727,6 +1728,60 @@ function renderPaste() {
  * 놓친 걸 놓친 줄 모르는 게 제일 나쁘다. 합계가 조용히 틀려 있으니까.
  * 카드 문자의 누적과 은행 문자의 잔액은 카드사·은행이 센 숫자라 진실이다.
  */
+/**
+ * 지출로 들어가 있는 카드값을 옮긴다.
+ *
+ * 카드값은 쓴 돈이 아니다 — 긁을 때 이미 셌다. 문자를 읽는 쪽은 고쳤지만
+ * **이미 들어간 건은 그대로 남아 있다.** 한 건이 백만원대라 그달 지출이
+ * 통째로 부풀고, 그 숫자가 "몇 달이면 정리된다"까지 끌고 간다.
+ *
+ * 묻지 않고 옮기지는 않는다. 가맹점명이 카드 이름으로 잘못 읽힌 진짜 지출일
+ * 수도 있어서다. 되돌릴 수 있게 둔다.
+ */
+function renderMisbilled() {
+  const list = cardBillSuspects({ transactions: D.txns, accounts: D.accounts,
+    moved: movedSet() }).slice(0, 8);
+  if (!list.length) return '';
+
+  const total = list.reduce((s2, t) => s2 + Number(t.amount || 0), 0);
+  return `<div class="card">
+    <div class="row" style="align-items:flex-start">
+      <span class="grow"><span style="font-size:15px;font-weight:600">카드값이 지출로 들어가 있습니다 · ${list.length}건</span><br>
+        <span class="muted">카드값은 긁을 때 이미 지출로 셉니다. 또 세면 그달 지출이
+          그만큼 부풉니다.</span></span>
+      <span class="big num" style="font-size:20px">${won(total)}</span></div>
+    ${list.map((t) => `<div class="row" style="padding:6px 0">
+      <span class="grow"><span style="font-size:13px;font-weight:600">${esc(t.merchantRaw || '(가맹점 미상)')}</span>
+        <span class="muted">${esc(String(t.occurredAt).slice(5, 10))}</span></span>
+      <span class="num" style="font-size:13px;font-weight:600">${won(t.amount)}</span></div>`).join('')}
+    <div style="display:flex;gap:7px;margin-top:12px">
+      <button type="button" class="act primary" style="flex:1" id="fixBills">이체로 옮기기</button>
+      <button type="button" class="act ghost" id="keepBills">지출로 두기</button>
+    </div></div>`;
+}
+
+/** 카드값을 이체로 옮긴다. 목록에는 남고 지출에서만 빠진다. */
+async function fixBills() {
+  const list = cardBillSuspects({ transactions: D.txns, accounts: D.accounts,
+    moved: movedSet() });
+  if (!list.length) return;
+
+  dropOlder();
+  const back = list.map((t) => ({ id: t.id, type: t.type || 'expense',
+    categoryId: t.categoryId || '', excludeFromBudget: t.excludeFromBudget === true }));
+  await commitAll(list.map((t) => (b) => b.update(doc(col('txns'), t.id), {
+    type: 'transfer', categoryId: 'cat_cardbill', excludeFromBudget: true,
+  })));
+  await refresh();
+  toast(`${list.length}건을 이체로 옮겼습니다`, async () => {
+    dropOlder();
+    await commitAll(back.map((o) => (b) => b.update(doc(col('txns'), o.id),
+      { type: o.type, categoryId: o.categoryId, excludeFromBudget: o.excludeFromBudget })));
+    await refresh();
+    toast(`${back.length}건을 되돌렸습니다`);
+  });
+}
+
 /**
  * 해외 결제의 원화 금액을 묻는다.
  *
@@ -3799,6 +3854,23 @@ document.addEventListener('click', guard(async (e) => {
       { fxPending: false, fxCurrency: '', fxAmount: 0 });
     await refresh();
     return toast('해외 결제 표시를 지웠습니다 — 금액은 내역에서 수정하세요');
+  }
+
+  if (e.target.id === 'fixBills') return fixBills();
+  if (e.target.id === 'keepBills') {
+    // 진짜 지출인데 가맹점명이 카드 이름으로 읽힌 것일 수 있다. 그때는
+    // 묻기를 그만둬야 한다 — 치울 길 없는 알림은 곧 안 보는 알림이 된다.
+    const list = cardBillSuspects({ transactions: D.txns, accounts: D.accounts,
+      moved: movedSet() });
+    if (!list.length) return;
+    if (!confirm(`${list.length}건을 지출로 그대로 둡니다.\n\n카드값이 맞다면 이 달 지출이 그만큼 부풀어 있습니다.`)) return;
+    dropOlder();
+    // 카테고리를 기타로 박아 두면 다시 묻지 않는다 — 카드 이름으로 읽혔을 뿐
+    // 진짜 지출이라는 뜻이다.
+    await commitAll(list.map((t) => (b) => b.update(doc(col('txns'), t.id),
+      { categoryId: t.categoryId || 'cat_etc' })));
+    await refresh();
+    return toast('지출로 두었습니다');
   }
 
   if (e.target.id === 'autoClassify') {

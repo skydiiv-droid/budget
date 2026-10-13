@@ -189,6 +189,67 @@ function matchByName(name, list) {
   return loose.length === 1 ? loose[0] : null;
 }
 
+/**
+ * 카드값 납부 문자인가.
+ *
+ * **카드값은 쓴 돈이 아니다** — 긁을 때 이미 지출로 셌다. 또 세면 그달 지출이
+ * 카드값만큼 부풀고, 리볼빙을 정리하는 중에는 그 숫자가 계획을 그대로 흔든다.
+ *
+ * 그런데 "카드대금"이라고 적어 주는 은행만 있는 게 아니다. 「현대카드」 한
+ * 마디이거나 「카드자동이체」이기도 하다. `matchAccount` 는 계좌 **이름**만
+ * 보므로 「현대카드」가 등록한 "현대 이마트Plus"에 안 걸렸다 — 그게 발급사
+ * 이름이라서다. 그래서 이름과 발급사를 다 보고, 말로도 본다.
+ *
+ * 다만 **카드로 긁은 문자는 카드값이 아니다.** 체크카드 즉시출금도 은행
+ * 문자로 오는데(잔액이 찍힌다) 그걸 카드값으로 빼면 쓴 돈이 사라진다.
+ * 승인·일시불·할부·누적·체크카드 같은 말이 있으면 손대지 않는다.
+ */
+export function cardBillIn(text, accounts = []) {
+  const body = String(text || '');
+  if (!body) return { ok: false, card: null };
+  // 긁은 문자다. 카드값이 아니다.
+  if (/승인|일시불|할부|누적|체크카드|가맹점/.test(body)) return { ok: false, card: null };
+
+  const key = flat(body);
+  const cards = accounts.filter((a) => alive(a) && isCard(a));
+
+  // 등록한 카드 이름이 본문에 있으면 어느 카드인지까지 안다
+  const named = cards.find((c) => flat(c.name).length >= 2 && key.includes(flat(c.name)));
+  if (named) return { ok: true, card: named };
+
+  // 발급사만 맞으면 카드값인 줄은 알아도 어느 카드인지는 모른다 (현대카드 두 장)
+  const sameIssuer = cards.filter((c) => flat(c.issuer).length >= 3 && key.includes(flat(c.issuer)));
+  if (sameIssuer.length) return { ok: true, card: sameIssuer.length === 1 ? sameIssuer[0] : null };
+
+  // 등록 안 한 카드여도 말로 알 수 있다. 「자동납부」 한 마디로는 모른다 —
+  // 통신비 자동납부일 수도 있어서 '카드'가 함께 있어야 한다.
+  if (/카드/.test(body) && /대금|값|결제|청구|납부|자동이체/.test(body)) {
+    return { ok: true, card: null };
+  }
+  return { ok: false, card: null };
+}
+
+/**
+ * 지출로 들어가 있는 카드값.
+ *
+ * 문자를 읽는 쪽을 고쳐도 **이미 들어간 건은 그대로다.** 카드값 한 건이
+ * 백만원대라 그달 지출이 통째로 부풀어 있고, 그 숫자로 "몇 달이면 정리된다"를
+ * 말하고 있었다. 찾아서 이체로 옮길 수 있게 내준다.
+ *
+ * 카드로 긁힌 거래는 후보가 아니다 — 카드값은 통장에서 빠진다.
+ */
+export function cardBillSuspects(data = {}) {
+  const { transactions = [], accounts = [], moved = new Set() } = data;
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+
+  return transactions
+    .filter((t) => t.type === 'expense' && t.status !== 'voided')
+    .filter((t) => !moved.has(t.categoryId))
+    .filter((t) => !isCard(byId.get(t.accountId) || {}))
+    .filter((t) => cardBillIn(t.merchantRaw, accounts).ok)
+    .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));
+}
+
 /** 그 거래가 이 카드들 중 하나로 긁힌 것인가. */
 export function inCards(t, cards = []) {
   if (t.accountId) return cards.some((c) => c.id === t.accountId);

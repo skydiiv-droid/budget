@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { debtOf, cashOf, billingWindow, cardBills, rollup, rateOf, cardGroup, matchCard,
-         matchAccount, inCards, billedIn }
+         matchAccount, inCards, billedIn, cardBillIn, cardBillSuspects }
   from './accounts.js';
 
 const NOW = new Date(2026, 8, 19, 12, 0);   // 2026-09-19
@@ -310,4 +310,71 @@ test('할부를 전액으로 세지 않는다', () => {
   const txns = [swipe('plan', 300_000, '2026-09-15T12:00:00', 3)];
   const [bill] = cardBills([PLAN_CARD], txns, new Date('2026-10-05T12:00:00'));
   assert.equal(bill.usage, 100_000, '승인은 30만이지만 이 달 청구는 10만이다');
+});
+
+// ── 카드값 납부 ──────────────────────────────────────────
+// 카드값은 쓴 돈이 아니다. 긁을 때 이미 셌다. 또 세면 그달 지출이 통째로 부푼다.
+
+const MINE = [
+  { id: 'acc_woori', name: '우리은행', type: 'checking', issuer: '우리은행', active: true },
+  { id: 'acc_emart', name: '현대 이마트Plus', type: 'card', cardType: 'credit',
+    issuer: '현대카드', active: true },
+  { id: 'acc_mirae', name: '현대 미래에셋', type: 'card', cardType: 'credit',
+    issuer: '현대카드', active: true },
+];
+
+test('발급사 이름만 찍혀도 카드값으로 본다', () => {
+  // 「현대카드」는 등록한 카드 이름이 아니라 발급사다. 이름만 보면 못 잡는다.
+  const r = cardBillIn('[Web발신]\n우리 10/10 09:12\n출금 1,234,567\n잔액 456,789\n현대카드', MINE);
+  assert.equal(r.ok, true);
+  assert.equal(r.card, null, '현대카드가 두 장이라 어느 쪽인지는 모른다');
+});
+
+test('카드 이름이 찍혀 있으면 어느 카드인지까지 안다', () => {
+  const r = cardBillIn('우리 10/10 출금 500,000 잔액 100,000 현대 미래에셋', MINE);
+  assert.equal(r.ok, true);
+  assert.equal(r.card?.id, 'acc_mirae');
+});
+
+test('이름이 없어도 말로 안다', () => {
+  for (const who of ['카드대금', '카드자동이체', '신용카드 결제', '카드값', '카드 청구']) {
+    assert.equal(cardBillIn(`우리 10/10 출금 300,000 잔액 1,000 ${who}`, []).ok, true, who);
+  }
+});
+
+test('「자동납부」 한 마디로는 카드값이라고 하지 않는다', () => {
+  // 통신비 자동납부일 수도 있다. 짐작해서 지출에서 빼면 쓴 돈이 안 보인다.
+  assert.equal(cardBillIn('우리 10/10 출금 55,000 잔액 1,000 자동납부', MINE).ok, false);
+});
+
+test('카드로 긁은 문자는 카드값이 아니다', () => {
+  // 체크카드 즉시출금도 은행 문자로 온다. 카드값으로 빼면 쓴 돈이 사라진다.
+  assert.equal(cardBillIn('우리 10/10 체크카드 승인 5,000 잔액 1,000 컴포즈커피', MINE).ok, false);
+  assert.equal(cardBillIn('현대카드 승인 1,800 일시불 컴포즈커피 누적 100,000', MINE).ok, false);
+});
+
+test('카드와 무관한 출금은 건드리지 않는다', () => {
+  assert.equal(cardBillIn('우리 10/10 출금 500,000 잔액 1,000 김수민', MINE).ok, false);
+  assert.equal(cardBillIn('우리 10/25 출금 123,450 잔액 1,000 관리비', MINE).ok, false);
+});
+
+test('지출로 들어가 있는 카드값을 찾아낸다', () => {
+  // 문자를 읽는 쪽을 고쳐도 이미 들어간 건은 그대로다. 카드값 한 건이
+  // 백만원대라 그달 지출이 통째로 부풀어 있다.
+  const txns = [
+    { id: 'bill', type: 'expense', amount: 1_234_567, occurredAt: '2026-10-10T09:12:00',
+      merchantRaw: '현대카드', accountId: 'acc_woori', status: 'confirmed' },
+    { id: 'fixed', type: 'expense', amount: 131_450, occurredAt: '2026-10-25T10:02:00',
+      merchantRaw: '관리비', accountId: 'acc_woori', status: 'confirmed' },
+    // 이미 이체로 옮겨 둔 것은 다시 묻지 않는다
+    { id: 'done', type: 'expense', amount: 900_000, occurredAt: '2026-09-10T09:12:00',
+      merchantRaw: '카드대금', accountId: 'acc_woori', categoryId: 'cat_cardbill',
+      status: 'confirmed' },
+    // 카드로 긁힌 건은 카드값이 아니다 — 카드값은 통장에서 빠진다
+    { id: 'swiped', type: 'expense', amount: 1_800, occurredAt: '2026-10-09T19:14:00',
+      merchantRaw: '현대카드', accountId: 'acc_mirae', status: 'confirmed' },
+  ];
+  const got = cardBillSuspects({ transactions: txns, accounts: MINE,
+    moved: new Set(['cat_cardbill', 'cat_saving']) });
+  assert.deepEqual(got.map((t) => t.id), ['bill']);
 });

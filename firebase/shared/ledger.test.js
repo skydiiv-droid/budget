@@ -134,15 +134,18 @@ test('달을 앞뒤로 옮기면 해가 넘어가도 맞는다', () => {
   assert.equal(shiftMonth('2026-01', -1), '2025-12');
 });
 
-test('그 달 지출만, 최근 것부터', () => {
+test('그 달 것만, 최근 것부터', () => {
   const rows = spend({ transactions: [
     { id: 't1', type: 'expense', amount: 1000, occurredAt: '2026-09-03T10:00:00' },
     { id: 't2', type: 'expense', amount: 2000, occurredAt: '2026-09-18T10:00:00' },
     { id: 't3', type: 'expense', amount: 3000, occurredAt: '2026-08-31T10:00:00' },
+    // 옮긴 돈은 목록에 남는다. 세는 것은 counted 가 가린다.
     { id: 't4', type: 'transfer', amount: 4000, occurredAt: '2026-09-10T10:00:00' },
     { id: 't5', type: 'expense', amount: 5000, occurredAt: '2026-09-11T10:00:00', status: 'voided' },
   ] });
-  assert.deepEqual(rows.map((r) => r.id), ['t2', 't1']);
+  assert.deepEqual(rows.map((r) => r.id), ['t2', 't4', 't1']);
+  assert.equal(rows.find((r) => r.id === 't4').counted, false);
+  assert.equal(rows.reduce((s, r) => s + (r.counted ? r.net : 0), 0), 3000);
 });
 
 test('예산에서 뺀 건은 목록에 남기되 세지 않는다', () => {
@@ -581,4 +584,31 @@ test('최근 실제 급여를 달별로 돌려준다 — 가장 적은 달을 �
 test('급여 기록이 없으면 권할 것도 없다', () => {
   assert.deepEqual(salaryHistory({ settings: SETTINGS }, 6, NOW),
     { items: [], low: 0, high: 0, avg: 0 });
+});
+
+test('옮긴 돈은 목록에 남고 세지는 않는다', () => {
+  // 통장에서 카드값 123만원이 빠졌는데 목록에 없으면 그 돈이 어디 갔는지
+  // 찾을 수가 없다. 문자에서 바로 알아본 것(type:'transfer')도 남겨야 한다.
+  const data = {
+    transactions: [
+      { id: 'bill', type: 'transfer', amount: 1_234_567, status: 'confirmed',
+        occurredAt: '2026-09-10T09:12:00', merchantRaw: '현대카드',
+        categoryId: 'cat_cardbill', excludeFromBudget: true },
+      { id: 'cafe', type: 'expense', amount: 4_500, status: 'confirmed',
+        occurredAt: '2026-09-11T12:00:00', merchantRaw: '컴포즈커피', categoryId: 'cat_cafe' },
+      { id: 'cancel', type: 'cancel', amount: 4_500, status: 'settled',
+        occurredAt: '2026-09-12T12:00:00', merchantRaw: '컴포즈커피' },
+    ],
+    categories: [{ id: 'cat_cardbill', name: '카드대금', kind: 'transfer' },
+                 { id: 'cat_cafe', name: '카페', kind: 'expense' }],
+  };
+  const rows = monthSpending(data, '2026-09', new Date('2026-09-20T12:00:00'));
+  assert.deepEqual(rows.map((r) => r.id), ['cafe', 'bill'], '취소 줄은 넣지 않는다');
+
+  const bill = rows.find((r) => r.id === 'bill');
+  assert.equal(bill.moved, true);
+  assert.equal(bill.counted, false, '지출로 세지는 않는다');
+  assert.equal(bill.inStats, false);
+  assert.equal(rows.reduce((s, r) => s + (r.counted ? r.net : 0), 0), 4_500);
+  assert.equal(breakdown(rows, data.categories).total, 4_500, '카테고리 합에도 없다');
 });

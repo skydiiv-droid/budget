@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { parseMessage, normalizeMerchant, splitMessages } from './shared/parse.js';
 import { classify, suggestKeyword } from './shared/classify.js';
 import { ledger, monthSpending, sameSpanLastMonth, pace, topSpending } from './shared/ledger.js';
-import { matchCard, matchAccount, isCard } from './shared/accounts.js';
+import { matchCard, matchAccount, isCard, cardBillIn } from './shared/accounts.js';
 import { looksLikeSaving } from './shared/categories.js';
 
 initializeApp();
@@ -246,10 +246,14 @@ function buildTransaction(parsed, rawId, location, decision, id, card, accounts 
     // 50만원을 쓴 것이 되고 예산도 통계도 그만큼 부풀어 오른다.
     const who = parsed.merchantRaw || '';
     const mine = matchAccount(who, accounts);
+    // 상대 이름만 보면 「현대카드」가 등록한 "현대 이마트Plus"에 안 걸린다 —
+    // 그게 발급사 이름이라서다. 본문을 통째로 보고 이름·발급사·말로 다 본다.
+    const bill = cardBillIn(body, accounts);
 
-    if (/카드\s*대금|카드대금/.test(who) || (mine && isCard(mine))) {
+    if (bill.ok || (mine && isCard(mine))) {
       txn.type = 'transfer';
       txn.categoryId = 'cat_cardbill';
+      txn.counterAccountId = bill.card?.id || (mine && isCard(mine) ? mine.id : null);
       txn.excludeFromBudget = true;
       txn.status = 'confirmed';
     } else if (/ATM|CD기|현금인출/i.test(who)) {

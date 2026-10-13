@@ -339,7 +339,11 @@ export function monthSpending(data = {}, yyyymm, now = new Date()) {
   const moved = transferCats(categories);
 
   return transactions
-    .filter((t) => t.status !== 'voided' && t.type === 'expense' && inWindow(t.occurredAt, win))
+    // 옮긴 돈(`transfer`)도 목록에는 남긴다 — 통장에서 카드값 123만원이 빠졌는데
+    // 목록에 없으면 "그날 그 돈이 어디 갔지" 하고 찾게 된다. 옮겼다는 것도
+    // 봐야 하는 사실이다. 세는 것은 `counted`·`inStats` 가 가린다.
+    .filter((t) => t.status !== 'voided' && inWindow(t.occurredAt, win))
+    .filter((t) => t.type === 'expense' || t.type === 'transfer')
     .map((t) => spendRow(t, settlements, moved))
     .sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));
 }
